@@ -6,7 +6,7 @@ export {
   bytesToBase64Url,
   bytesToHex,
   hexToBytes,
-} from './codec'
+} from "./codec.js";
 export {
   CEK_BYTES,
   deriveKeyEncryptionKey,
@@ -15,21 +15,25 @@ export {
   isValidCek,
   unwrapCek,
   wrapCek,
-} from './crypto'
+} from "./crypto.js";
 export {
   PasskeyKitError,
   PasskeyTimeoutError,
   PrfNotSupportedError,
-} from './errors'
-export { createPasskeyKit } from './kit'
-export type { PasskeyKit } from './kit'
-export { TINFOIL_HKDF_INFO_V1, TINFOIL_PRF_SALT_INPUT_V1 } from './protocol'
+} from "./errors.js";
+export { createPasskeyKit } from "./kit.js";
+export type { PasskeyKit } from "./kit.js";
+export {
+  TINFOIL_HKDF_INFO_V1,
+  TINFOIL_KEY_ID_INFO_V1,
+  TINFOIL_PRF_SALT_INPUT_V1,
+} from "./protocol.js";
 export {
   browserLocalStorageAdapter,
   createMemoryStorageAdapter,
-} from './storage'
-export type { StorageAdapter } from './storage'
-export { detectPrfSupport } from './support'
+} from "./storage.js";
+export type { StorageAdapter } from "./storage.js";
+export { detectPrfSupport } from "./support.js";
 export type {
   EnrollResult,
   PasskeyKitConfig,
@@ -40,4 +44,4 @@ export type {
   PrfPasskeyResult,
   UnlockResult,
   WrappedCek,
-} from './types'
+} from "./types.js";

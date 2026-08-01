@@ -1,34 +1,55 @@
 {
   "name": "@tinfoilsh/passkey-kit",
   "version": "0.1.0",
-  "description": "WebAuthn PRF passkey SDK: device support detection, passkey ceremonies, and CEK wrapping under a passkey-derived KEK.",
-  "license": "GPL-3.0",
+  "description": "WebAuthn PRF passkey SDK for protecting encryption keys with passkey-derived keys.",
+  "license": "Apache-2.0",
   "type": "module",
   "sideEffects": false,
-  "main": "./src/index.ts",
-  "types": "./src/index.ts",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
   },
   "files": [
     "dist",
     "src"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "prepublishOnly": "npm run build"
+    "clean": "node --input-type=module -e \"import { rmSync } from 'node:fs'; rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.test.json",
+    "prepare": "npm run build",
+    "prepublishOnly": "npm run test && npm run typecheck"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tinfoilsh/tinfoil-passkey-kit.git"
+  },
+  "homepage": "https://github.com/tinfoilsh/tinfoil-passkey-kit#readme",
+  "bugs": {
+    "url": "https://github.com/tinfoilsh/tinfoil-passkey-kit/issues"
+  },
+  "keywords": [
+    "passkey",
+    "webauthn",
+    "prf",
+    "webcrypto",
+    "encryption"
+  ],
+  "engines": {
+    "node": ">=20"
   },
   "publishConfig": {
-    "main": "./dist/index.js",
-    "types": "./dist/index.d.ts",
-    "exports": {
-      ".": {
-        "types": "./dist/index.d.ts",
-        "default": "./dist/index.js"
-      }
-    }
+    "access": "public"
   },
   "devDependencies": {
-    "typescript": "^5"
+    "happy-dom": "^20.0.11",
+    "typescript": "^5",
+    "vitest": "^4.0.16"
   }
 }

@@ -1,78 +1,127 @@
-# @tinfoilsh/passkey-kit
+# Tinfoil Passkey Kit
 
-Browser SDK for passkey-based key protection. It wraps the WebAuthn PRF
-extension into a small, typed API:
+Cross-platform SDKs for protecting content-encryption keys with passkeys and
+the WebAuthn PRF extension. The JavaScript and Swift implementations share the
+same protocol constants and wire formats, so either client can recover a CEK
+wrapped by the other.
 
-- Device support detection (`isPrfSupported`)
-- Passkey ceremonies (create / authenticate with the PRF extension)
-- KEK derivation from PRF output (HKDF-SHA-256)
-- CEK wrap/unwrap under the KEK (AES-256-GCM)
-- Device-local state (PRF output cache, this device's credential id) via a
-  pluggable storage adapter
+- Passkey creation and authentication with PRF
+- HKDF-SHA-256 key-encryption-key derivation
+- AES-256-GCM CEK wrapping and unwrapping
+- Stable CEK key-ID derivation
+- Device-local PRF and credential persistence
 
-## Usage
+## JavaScript
+
+Install the browser package:
+
+```sh
+npm install @tinfoilsh/passkey-kit
+```
 
 ```ts
-import { createPasskeyKit, generateCek } from '@tinfoilsh/passkey-kit'
+import { createPasskeyKit, generateCek } from "@tinfoilsh/passkey-kit";
 
 const kit = createPasskeyKit({
-  rpId: 'example.com',
-  rpName: 'Example App',
-})
+  rpId: "example.com",
+  rpName: "Example App",
+});
 
-// Bring your own 32-byte CEK, or generate a fresh one.
-const cek = generateCek()
-
-// Enroll: create a passkey and wrap the user's 32-byte CEK under it.
-// `wrappedCek` is safe to persist server-side; `prfResult` is cached
-// locally through the storage adapter automatically.
+const cek = generateCek();
 const enrolled = await kit.enroll({
   user: { id: userId, name: email, displayName },
   cek,
-})
+});
+
 if (enrolled) {
-  await api.saveBundle(enrolled.wrappedCek)
+  await api.saveBundle(enrolled.wrappedCek);
 }
 
-// Unlock: prompt for a passkey and recover the CEK from the matching bundle.
-const unlocked = await kit.unlock(bundlesFromServer)
+const unlocked = await kit.unlock(bundlesFromServer);
 if (unlocked) {
-  useCek(unlocked.cek)
+  useCek(unlocked.cek);
 }
-
-// Silent unlock via the cached PRF output (no biometric prompt).
-// Returns null when nothing usable is cached — fall back to unlock().
-const silent = await kit.unlockWithCachedPrf(bundlesFromServer)
-
-// Re-wrap without a biometric prompt using the cached PRF output.
-const rewrapped = await kit.rewrapWithCachedPrf(newCek)
 ```
 
-Lower-level building blocks (`createPasskey`, `authenticate`, `deriveKek`,
-`generateCek`, `isValidCek`, `wrapCek`, `unwrapCek`, `deriveKeyId`) are
-exported for flows that need finer control.
+High-level ceremony methods return `null` when the user cancels. They throw
+`PrfNotSupportedError` when the authenticator lacks PRF support and
+`PasskeyTimeoutError` when the provider hangs. Classify these errors with
+`instanceof`, not message strings.
 
-## Conventions
+The kit also provides cached unlock and rewrap flows. Lower-level exports
+include `detectPrfSupport`, `deriveKeyEncryptionKey`, `generateCek`,
+`isValidCek`, `wrapCek`, `unwrapCek`, and `deriveKeyId`.
 
-- High-level ceremony methods return `null` when the user cancels; they
-  throw `PrfNotSupportedError` when the authenticator lacks PRF support and
-  `PasskeyTimeoutError` when the provider hangs. Branch on `instanceof`,
-  never on message strings.
-- `prfSaltInput` and `hkdfInfo` default to the Tinfoil v1 protocol
-  constants so wrapped CEKs interoperate across Tinfoil clients. Override
-  both to establish a new protocol domain.
-- The default storage adapter is best-effort `localStorage`; pass
-  `storage: null` to disable local persistence, or supply your own
-  `StorageAdapter`.
-- Error messages default to brand-neutral text; pass `errorMessages` to
-  brand or localize them without affecting the error classes.
+The default storage adapter uses `localStorage` on a best-effort basis. Pass
+`storage: null` to disable persistence or provide a custom `StorageAdapter`.
+Cached PRF output is raw secret key material and must be protected accordingly.
 
-## Security
+## Swift
 
-The cached PRF output is raw key material: anyone who can read it can
-re-derive the KEK and unwrap the CEK. The default adapter stores it in
-`localStorage` as plaintext, which is only as strong as the origin's
-script-injection defenses. Hosts that need at-rest protection should
-supply a `StorageAdapter` with their own encryption, or set
-`storage: null` to keep nothing on device and re-prompt biometrics
-instead.
+Add this repository as a Swift Package Manager dependency and link the
+`TinfoilPasskeyKit` product. The package requires iOS 18 or macOS 15.
+
+```swift
+import TinfoilPasskeyKit
+
+@MainActor
+func configurePasskeyKit() async throws {
+    let store = KeychainPasskeyStateStore(
+        service: "example.com",
+        account: "com.example.passkey-prf",
+        localCredentialIdKey: "com.example.local-passkey-id"
+    )
+    let kit = PasskeyKit(
+        configuration: PasskeyKitConfiguration(
+            rpId: "example.com",
+            rpName: "Example App",
+            stateStore: store
+        )
+    )
+
+    let cek = try PasskeyCrypto.generateCEK()
+    let enrollment = try await kit.enroll(
+        user: PasskeyUser(id: userId, name: email, displayName: displayName),
+        cek: cek
+    )
+    await saveToServer(enrollment.wrappedCEK)
+
+    let unlocked = try await kit.unlock(wrappedCEKsFromServer)
+    useCEK(unlocked.cek)
+}
+```
+
+`KeychainPasskeyStateStore` stores cached PRF output with
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Pass `stateStore: nil` to
+disable local persistence. The host app must provide the `webcredentials`
+associated-domain entitlement for its relying-party domain.
+
+## Protocol
+
+Both implementations default to the Tinfoil v1 PRF salt and HKDF info. These
+values must remain identical across clients that wrap the same CEK. Override
+both values together to establish a separate protocol domain.
+
+The server-persisted wrapped bundle contains only:
+
+- The unpadded base64url credential ID
+- The 12-byte AES-GCM IV as lowercase hexadecimal
+- The wrapped CEK ciphertext and 16-byte authentication tag as lowercase
+  hexadecimal
+
+User identity, server persistence, associated-domain configuration, and
+recovery UI remain the host application's responsibility.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
+
+## Development
+
+```sh
+npm install
+npm test
+npm run typecheck
+npm run build
+swift test
+```

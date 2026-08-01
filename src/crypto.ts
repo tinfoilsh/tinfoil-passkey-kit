@@ -7,18 +7,18 @@
  * - RFC 5869 (HKDF): https://tools.ietf.org/html/rfc5869
  */
 
-import { bytesToHex, hexToBytes, toBytes } from './codec'
-import { PasskeyKitError } from './errors'
-import { TINFOIL_HKDF_INFO_V1 } from './protocol'
-import type { WrappedCek } from './types'
+import { bytesToHex, hexToBytes, toBytes } from "./codec.js";
+import { PasskeyKitError } from "./errors.js";
+import { TINFOIL_HKDF_INFO_V1, TINFOIL_KEY_ID_INFO_V1 } from "./protocol.js";
+import type { WrappedCek } from "./types.js";
 
-export const CEK_BYTES = 32
-const AES_GCM_IV_BYTES = 12
-const DEFAULT_KEY_ID_BYTES = 16
+export const CEK_BYTES = 32;
+const AES_GCM_IV_BYTES = 12;
+const DEFAULT_KEY_ID_BYTES = 16;
 
 /** Generate a fresh random 32-byte CEK suitable for {@link wrapCek}. */
 export function generateCek(): Uint8Array {
-  return crypto.getRandomValues(new Uint8Array(CEK_BYTES))
+  return crypto.getRandomValues(new Uint8Array(CEK_BYTES));
 }
 
 /**
@@ -27,7 +27,7 @@ export function generateCek(): Uint8Array {
  * before wrapping.
  */
 export function isValidCek(cek: unknown): cek is Uint8Array {
-  return cek instanceof Uint8Array && cek.length === CEK_BYTES
+  return cek instanceof Uint8Array && cek.length === CEK_BYTES;
 }
 
 /**
@@ -46,25 +46,25 @@ export async function deriveKeyEncryptionKey(
   hkdfInfo: string | Uint8Array = TINFOIL_HKDF_INFO_V1,
 ): Promise<CryptoKey> {
   const masterKey = await crypto.subtle.importKey(
-    'raw',
+    "raw",
     prfOutput as BufferSource,
-    'HKDF',
+    "HKDF",
     false, // non-extractable
-    ['deriveKey'],
-  )
+    ["deriveKey"],
+  );
 
   return crypto.subtle.deriveKey(
     {
-      name: 'HKDF',
-      hash: 'SHA-256',
+      name: "HKDF",
+      hash: "SHA-256",
       salt: new Uint8Array(),
       info: toBytes(hkdfInfo) as BufferSource,
     },
     masterKey,
-    { name: 'AES-GCM', length: 256 },
+    { name: "AES-GCM", length: 256 },
     false, // non-extractable
-    ['encrypt', 'decrypt'],
-  )
+    ["encrypt", "decrypt"],
+  );
 }
 
 /**
@@ -73,26 +73,26 @@ export async function deriveKeyEncryptionKey(
  * server-side; only the matching passkey can recover the CEK.
  */
 export async function wrapCek(opts: {
-  credentialId: string
-  kek: CryptoKey
-  cek: Uint8Array
+  credentialId: string;
+  kek: CryptoKey;
+  cek: Uint8Array;
 }): Promise<WrappedCek> {
   if (opts.cek.length !== CEK_BYTES) {
     throw new PasskeyKitError(
       `passkey-kit: CEK must be ${CEK_BYTES} bytes, got ${opts.cek.length}`,
-    )
+    );
   }
-  const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES))
+  const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
   const ciphertext = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: iv as BufferSource },
+    { name: "AES-GCM", iv: iv as BufferSource },
     opts.kek,
     opts.cek as BufferSource,
-  )
+  );
   return {
     credentialId: opts.credentialId,
     kekIvHex: bytesToHex(iv),
     wrappedKeyHex: bytesToHex(new Uint8Array(ciphertext)),
-  }
+  };
 }
 
 /**
@@ -101,61 +101,61 @@ export async function wrapCek(opts: {
  */
 export async function unwrapCek(
   kek: CryptoKey,
-  wrapped: Pick<WrappedCek, 'kekIvHex' | 'wrappedKeyHex'>,
+  wrapped: Pick<WrappedCek, "kekIvHex" | "wrappedKeyHex">,
 ): Promise<Uint8Array> {
   if (!wrapped.kekIvHex || !wrapped.wrappedKeyHex) {
-    throw new PasskeyKitError('passkey-kit: missing iv or wrapped key')
+    throw new PasskeyKitError("passkey-kit: missing iv or wrapped key");
   }
-  const iv = hexToBytes(wrapped.kekIvHex)
+  const iv = hexToBytes(wrapped.kekIvHex);
   if (iv.length !== AES_GCM_IV_BYTES) {
-    throw new PasskeyKitError('passkey-kit: iv length mismatch')
+    throw new PasskeyKitError("passkey-kit: iv length mismatch");
   }
-  const ciphertext = hexToBytes(wrapped.wrappedKeyHex)
+  const ciphertext = hexToBytes(wrapped.wrappedKeyHex);
   const plaintext = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: iv as BufferSource },
+    { name: "AES-GCM", iv: iv as BufferSource },
     kek,
     ciphertext as BufferSource,
-  )
-  const cek = new Uint8Array(plaintext)
+  );
+  const cek = new Uint8Array(plaintext);
   if (cek.length !== CEK_BYTES) {
     throw new PasskeyKitError(
       `passkey-kit: unwrapped CEK has wrong length ${cek.length}`,
-    )
+    );
   }
-  return cek
+  return cek;
 }
 
 /**
  * Derive a stable public identifier for a CEK via HKDF-SHA-256 with an
- * empty salt and a caller-supplied info string. The result identifies the
- * key without revealing it (one-way derivation).
+ * empty salt and a purpose-binding info string. The result identifies the key
+ * without revealing it (one-way derivation).
  */
 export async function deriveKeyId(
   cek: Uint8Array,
-  opts: { info: string | Uint8Array; lengthBytes?: number },
+  opts: { info?: string | Uint8Array; lengthBytes?: number } = {},
 ): Promise<Uint8Array> {
   if (cek.length !== CEK_BYTES) {
     throw new PasskeyKitError(
       `passkey-kit: CEK must be ${CEK_BYTES} bytes, got ${cek.length}`,
-    )
+    );
   }
-  const lengthBytes = opts.lengthBytes ?? DEFAULT_KEY_ID_BYTES
+  const lengthBytes = opts.lengthBytes ?? DEFAULT_KEY_ID_BYTES;
   const ikm = await crypto.subtle.importKey(
-    'raw',
+    "raw",
     cek as BufferSource,
-    'HKDF',
+    "HKDF",
     false,
-    ['deriveBits'],
-  )
+    ["deriveBits"],
+  );
   const bits = await crypto.subtle.deriveBits(
     {
-      name: 'HKDF',
-      hash: 'SHA-256',
+      name: "HKDF",
+      hash: "SHA-256",
       salt: new Uint8Array(0) as BufferSource,
-      info: toBytes(opts.info) as BufferSource,
+      info: toBytes(opts.info ?? TINFOIL_KEY_ID_INFO_V1) as BufferSource,
     },
     ikm,
     lengthBytes * 8,
-  )
-  return new Uint8Array(bits)
+  );
+  return new Uint8Array(bits);
 }

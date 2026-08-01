@@ -1,20 +1,20 @@
-import type { StorageAdapter } from './storage'
+import type { StorageAdapter } from "./storage.js";
 
 /** Structured logging hooks; the SDK never writes to the console itself. */
 export interface PasskeyKitLogger {
-  info?(message: string, metadata?: Record<string, unknown>): void
+  info?(message: string, metadata?: Record<string, unknown>): void;
   error?(
     message: string,
     error?: unknown,
     metadata?: Record<string, unknown>,
-  ): void
+  ): void;
 }
 
 export interface PasskeyKitStorageKeys {
   /** Key under which the cached PRF result is persisted. */
-  prfResult: string
+  prfResult: string;
   /** Key under which this device's own credential id is persisted. */
-  localCredentialId: string
+  localCredentialId: string;
 }
 
 /**
@@ -24,90 +24,90 @@ export interface PasskeyKitStorageKeys {
  */
 export interface PasskeyKitErrorMessages {
   /** Message used for `PrfNotSupportedError`. */
-  prfNotSupported?: string
+  prfNotSupported?: string;
   /** Message used for `PasskeyTimeoutError`. */
-  timeout?: string
+  timeout?: string;
 }
 
 export interface PasskeyKitConfig {
   /** WebAuthn relying party id (e.g. `example.com`, or `localhost` in dev). */
-  rpId: string
+  rpId: string;
   /** Human-readable relying party name shown in passkey prompts. */
-  rpName: string
+  rpName: string;
   /**
    * Input to the PRF `eval.first` salt. Must stay stable across all clients
    * of the same protocol: changing it changes every derived KEK.
    * Defaults to the Tinfoil v1 protocol constant.
    */
-  prfSaltInput?: string | Uint8Array
+  prfSaltInput?: string | Uint8Array;
   /**
    * HKDF info string used for domain separation when deriving the KEK from
    * the PRF output. Defaults to the Tinfoil v1 protocol constant.
    */
-  hkdfInfo?: string | Uint8Array
+  hkdfInfo?: string | Uint8Array;
   /**
    * Local persistence for the PRF cache and this device's credential id.
    * Defaults to a best-effort `localStorage` adapter; pass `null` to
    * disable local persistence entirely.
    */
-  storage?: StorageAdapter | null
-  storageKeys?: Partial<PasskeyKitStorageKeys>
+  storage?: StorageAdapter | null;
+  storageKeys?: Partial<PasskeyKitStorageKeys>;
   /** Timeout passed to the WebAuthn API (some browsers ignore this). */
-  webauthnTimeoutMs?: number
+  webauthnTimeoutMs?: number;
   /**
    * Hard client-side timeout guarding against providers that never resolve
    * the WebAuthn promise. When exceeded, `PasskeyTimeoutError` is thrown.
    */
-  stuckTimeoutMs?: number
+  stuckTimeoutMs?: number;
   /** Custom messages for the errors the SDK throws. */
-  errorMessages?: PasskeyKitErrorMessages
-  logger?: PasskeyKitLogger
+  errorMessages?: PasskeyKitErrorMessages;
+  logger?: PasskeyKitLogger;
 }
 
 /** Identity attached to a newly created passkey. */
 export interface PasskeyUser {
   /** Stable opaque user id (becomes the WebAuthn user handle). */
-  id: string
+  id: string;
   /** Account identifier shown in passkey pickers (usually an email). */
-  name: string
+  name: string;
   /** Friendly display name; falls back to `name` when omitted. */
-  displayName?: string
+  displayName?: string;
 }
 
 /** Result of a successful PRF ceremony (create or authenticate). */
 export interface PrfPasskeyResult {
   /** base64url-encoded credential id. */
-  credentialId: string
+  credentialId: string;
   /** Raw 32-byte PRF output; treat as secret key material. */
-  prfOutput: ArrayBuffer
+  prfOutput: ArrayBuffer;
 }
 
 /** A CEK wrapped under a passkey-derived KEK with AES-256-GCM. */
 export interface WrappedCek {
   /** base64url-encoded credential id whose PRF output wraps this CEK. */
-  credentialId: string
+  credentialId: string;
   /** 12-byte AES-GCM IV, hex-encoded. */
-  kekIvHex: string
+  kekIvHex: string;
   /** Wrapped CEK ciphertext (including GCM tag), hex-encoded. */
-  wrappedKeyHex: string
+  wrappedKeyHex: string;
 }
 
 /** Result of the high-level enroll flow: create passkey + wrap CEK. */
 export interface EnrollResult {
-  credentialId: string
+  credentialId: string;
   /** Ciphertext safe to persist server-side. */
-  wrappedCek: WrappedCek
+  wrappedCek: WrappedCek;
   /**
    * Device-local secret state (PRF output). Already persisted through the
    * storage adapter when one is configured; returned so hosts with custom
    * persistence can store it themselves.
    */
-  prfResult: PrfPasskeyResult
+  prfResult: PrfPasskeyResult;
 }
 
 /** Result of the high-level unlock flow: authenticate + unwrap CEK. */
 export interface UnlockResult {
-  credentialId: string
+  credentialId: string;
   /** The recovered raw 32-byte CEK. */
-  cek: Uint8Array
+  cek: Uint8Array;
 }
