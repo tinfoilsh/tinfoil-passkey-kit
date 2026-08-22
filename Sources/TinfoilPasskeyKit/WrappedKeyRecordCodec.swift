@@ -35,9 +35,18 @@ public func encodeWrappedKeyRecord(_ wrappedKey: WrappedKey) throws -> Data {
 }
 
 public func decodeWrappedKeyRecord(_ json: Data) throws -> WrappedKey {
+    let utf8BOM = Data([0xEF, 0xBB, 0xBF])
+    guard !json.starts(with: utf8BOM),
+          let jsonString = String(data: json, encoding: .utf8),
+          Data(jsonString.utf8) == json,
+          !jsonString.unicodeScalars.contains(where: { $0.value == 0 }) else {
+        throw PasskeyKeyError.invalidInput(
+            diagnostic: "wrapped key JSON must be strict UTF-8 without a BOM"
+        )
+    }
     let value: Any
     do {
-        value = try JSONSerialization.jsonObject(with: json)
+        value = try JSONSerialization.jsonObject(with: Data(jsonString.utf8))
     } catch {
         throw PasskeyKeyError.invalidInput(
             diagnostic: "wrapped key JSON is malformed",
