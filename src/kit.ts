@@ -11,6 +11,7 @@ import { capability as detectCapability } from "./support.js";
 import type { CachedPRFResult } from "./storage.js";
 import type {
   CreateAndWrapKeyInput,
+  EvaluateCredentialInput,
   PasskeyKeyManager,
   PasskeyKeyManagerConfig,
   PasskeyUser,
@@ -59,10 +60,14 @@ function mapCeremonyError(error: unknown, operation: string): PasskeyKeyError {
   });
 }
 
-function context(profile: PasskeyKeyProfileSnapshot, timeoutMs: number): CeremonyContext {
+function context(
+  profile: PasskeyKeyProfileSnapshot,
+  relyingPartyName: string,
+  timeoutMs: number,
+): CeremonyContext {
   return {
     rpId: profile.relyingPartyId,
-    rpName: profile.relyingPartyName,
+    rpName: relyingPartyName,
     prfInput: profile.prfSalt,
     timeoutMs,
   };
@@ -94,6 +99,13 @@ export function createPasskeyKeyManager(
 ): PasskeyKeyManager {
   if (!config || typeof config !== "object") throw invalidInput("manager config is required");
   const profile = copyAndValidateProfile(config.profile);
+  if (
+    typeof config.relyingPartyName !== "string" ||
+    config.relyingPartyName.length === 0
+  ) {
+    throw invalidInput("relyingPartyName must be a non-empty string");
+  }
+  const relyingPartyName = config.relyingPartyName;
   if (
     config.timeoutMs !== undefined &&
     (!Number.isFinite(config.timeoutMs) || config.timeoutMs <= 0)
@@ -219,10 +231,22 @@ export function createPasskeyKeyManager(
   }
 
   function orderedCredentialIds(
-    wrappedKeys: WrappedKey[],
+    credentialIds: string[],
     preferredCredentialId?: string,
   ): string[] {
-    const unique = [...new Set(wrappedKeys.map((wrapped) => wrapped.credentialId))];
+    if (!Array.isArray(credentialIds) || credentialIds.length === 0) {
+      throw invalidInput("at least one credentialId is required");
+    }
+    const unique = [...new Set(credentialIds)];
+    for (const credentialId of unique) {
+      if (
+        typeof credentialId !== "string" ||
+        !/^[A-Za-z0-9_-]+$/.test(credentialId) ||
+        credentialId.length % 4 === 1
+      ) {
+        throw invalidInput("credentialId must be unpadded base64url");
+      }
+    }
     const preferred = preferredCredentialId ?? loadPreferredCredentialId();
     if (!preferred || !unique.includes(preferred)) return unique;
     return [preferred, ...unique.filter((credentialId) => credentialId !== preferred)];
@@ -234,7 +258,7 @@ export function createPasskeyKeyManager(
     const key = input.key.slice();
     const user = copyUser(input.user);
     const result = await runCeremony("createAndWrapKey", input.signal, (signal) =>
-      createPrfCredential(context(profile, timeoutMs), user, signal),
+      createPrfCredential(context(profile, relyingPartyName, timeoutMs), user, signal),
     );
     recordSuccessfulCredential(result);
     const wrappedKey = await wrapKey(
@@ -253,6 +277,40 @@ export function createPasskeyKeyManager(
     return wrappedKeys;
   }
 
+  async function evaluateCredential(
+    input: EvaluateCredentialInput,
+    operation = "evaluateCredential",
+  ) {
+    if (!input || typeof input !== "object") throw invalidInput("input is required");
+    const interaction = input.interaction ?? "interactive";
+    if (interaction !== "interactive" && interaction !== "immediatelyAvailable") {
+      throw invalidInput("interaction must be interactive or immediatelyAvailable", operation);
+    }
+    if (interaction === "immediatelyAvailable") {
+      throw new PasskeyKeyError(
+        "unsupported",
+        "immediatelyAvailable credential evaluation is not supported in browsers",
+        { operation },
+      );
+    }
+    const credentialIds = orderedCredentialIds(
+      input.credentialIds,
+      input.preferredCredentialId,
+    );
+    const result = await runCeremony(operation, input.signal, (signal) =>
+      evaluatePrfCredential(
+        context(profile, relyingPartyName, timeoutMs),
+        credentialIds,
+        signal,
+      ),
+    );
+    recordSuccessfulCredential(result);
+    return {
+      credentialId: result.credentialId,
+      prfResult: { output: result.prfOutput.slice() },
+    };
+  }
+
   return {
     async capability(input) {
       if (
@@ -267,23 +325,28 @@ export function createPasskeyKeyManager(
 
     createAndWrapKey,
 
+    evaluateCredential(input) {
+      return evaluateCredential(input);
+    },
+
     async recoverKey(input) {
       const wrappedKeys = prepareRecovery(input);
-      const credentialIds = orderedCredentialIds(
-        wrappedKeys,
-        input.preferredCredentialId,
+      const result = await evaluateCredential(
+        {
+          credentialIds: wrappedKeys.map((wrapped) => wrapped.credentialId),
+          preferredCredentialId: input.preferredCredentialId,
+          signal: input.signal,
+          interaction: input.interaction,
+        },
+        "recoverKey",
       );
-      const result = await runCeremony("recoverKey", input.signal, (signal) =>
-        evaluatePrfCredential(context(profile, timeoutMs), credentialIds, signal),
-      );
-      recordSuccessfulCredential(result);
       const wrapped = wrappedKeys.find(
         (candidate) => candidate.credentialId === result.credentialId,
       );
       if (!wrapped) throw invalidInput("credential has no matching wrapped key", "recoverKey");
       return {
         credentialId: result.credentialId,
-        key: await unwrapKey(profile, result.prfOutput, wrapped),
+        key: await unwrapKey(profile, result.prfResult.output, wrapped),
       };
     },
 

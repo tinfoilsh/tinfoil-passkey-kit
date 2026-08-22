@@ -9,7 +9,6 @@ const AES_GCM_TAG_BYTES = 16;
 const PROFILE_KEYS = [
   "version",
   "relyingPartyId",
-  "relyingPartyName",
   "prfSalt",
   "hkdfInfo",
 ] as const;
@@ -27,21 +26,17 @@ export function copyAndValidateProfile(profile: PasskeyKeyProfile): PasskeyKeyPr
   if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
     throw invalidInput(`profile must contain exactly ${PROFILE_KEYS.join(", ")}`);
   }
-  if (!Number.isSafeInteger(profile.version) || profile.version <= 0) {
-    throw invalidInput("profile.version must be a positive integer");
+  if (profile.version !== 1) {
+    throw invalidInput("profile.version must be 1");
   }
   if (typeof profile.relyingPartyId !== "string" || profile.relyingPartyId.length === 0) {
     throw invalidInput("profile.relyingPartyId must be a non-empty string");
-  }
-  if (typeof profile.relyingPartyName !== "string" || profile.relyingPartyName.length === 0) {
-    throw invalidInput("profile.relyingPartyName must be a non-empty string");
   }
   assertBytes(profile.prfSalt, "profile.prfSalt");
   assertBytes(profile.hkdfInfo, "profile.hkdfInfo");
   return {
     version: profile.version,
     relyingPartyId: profile.relyingPartyId,
-    relyingPartyName: profile.relyingPartyName,
     prfSalt: profile.prfSalt.slice(),
     hkdfInfo: profile.hkdfInfo.slice(),
   };
@@ -54,7 +49,6 @@ export function profilesEqual(
   return (
     left.version === right.version &&
     left.relyingPartyId === right.relyingPartyId &&
-    left.relyingPartyName === right.relyingPartyName &&
     left.prfSalt.length === right.prfSalt.length &&
     left.prfSalt.every((byte, index) => byte === right.prfSalt[index]) &&
     left.hkdfInfo.length === right.hkdfInfo.length &&

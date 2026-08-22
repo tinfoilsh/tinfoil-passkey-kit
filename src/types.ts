@@ -3,7 +3,6 @@ import type { PasskeyKeyStorage } from "./storage.js";
 export interface PasskeyKeyProfile {
   version: number;
   relyingPartyId: string;
-  relyingPartyName: string;
   prfSalt: Uint8Array;
   hkdfInfo: Uint8Array;
 }
@@ -22,6 +21,7 @@ export interface PasskeyUser {
 }
 
 export type PasskeyCapability = "supported" | "unsupported" | "unknown";
+export type PasskeyInteraction = "interactive" | "immediatelyAvailable";
 
 export interface CreateAndWrapKeyInput {
   user: PasskeyUser;
@@ -38,6 +38,23 @@ export interface RecoverKeyInput {
   wrappedKeys: WrappedKey[];
   preferredCredentialId?: string;
   signal?: AbortSignal;
+  interaction?: PasskeyInteraction;
+}
+
+export interface EvaluateCredentialInput {
+  credentialIds: string[];
+  preferredCredentialId?: string;
+  signal?: AbortSignal;
+  interaction?: PasskeyInteraction;
+}
+
+export interface PRFResult {
+  output: Uint8Array;
+}
+
+export interface EvaluatedCredential {
+  credentialId: string;
+  prfResult: PRFResult;
 }
 
 export interface RecoveredKey {
@@ -51,6 +68,7 @@ export interface RewrapKeyInput {
 
 export interface PasskeyKeyManagerConfig {
   profile: PasskeyKeyProfile;
+  relyingPartyName: string;
   timeoutMs?: number;
   storage?: PasskeyKeyStorage;
 }
@@ -61,8 +79,22 @@ export interface PasskeyKeyManager {
   }): Promise<PasskeyCapability>;
   createAndWrapKey(input: CreateAndWrapKeyInput): Promise<CreatedWrappedKey>;
   recoverKey(input: RecoverKeyInput): Promise<RecoveredKey>;
+  evaluateCredential(input: EvaluateCredentialInput): Promise<EvaluatedCredential>;
   recoverKeyFromCache(input: RecoverKeyInput): Promise<RecoveredKey | null>;
   rewrapKeyFromCache(input: RewrapKeyInput): Promise<WrappedKey | null>;
   clearLocalState(): void;
   cancelActiveCeremony(): void;
+}
+
+export interface WrappedKeyRecord {
+  version: 1;
+  profile: {
+    version: 1;
+    relyingPartyId: string;
+    prfSalt: string;
+    hkdfInfo: string;
+  };
+  credentialId: string;
+  kekIvHex: string;
+  wrappedKeyHex: string;
 }

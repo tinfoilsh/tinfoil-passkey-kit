@@ -81,7 +81,6 @@ export function createInsecureBrowserLocalStoragePasskeyKeyStorage(
           profile: {
             version: stored.profile.version,
             relyingPartyId: stored.profile.relyingPartyId,
-            relyingPartyName: stored.profile.relyingPartyName,
             prfSalt: base64ToBytes(stored.profile.prfSaltBase64),
             hkdfInfo: base64ToBytes(stored.profile.hkdfInfoBase64),
           },
@@ -98,7 +97,6 @@ export function createInsecureBrowserLocalStoragePasskeyKeyStorage(
         profile: {
           version: result.profile.version,
           relyingPartyId: result.profile.relyingPartyId,
-          relyingPartyName: result.profile.relyingPartyName,
           prfSaltBase64: bytesToBase64(result.profile.prfSalt),
           hkdfInfoBase64: bytesToBase64(result.profile.hkdfInfo),
         },

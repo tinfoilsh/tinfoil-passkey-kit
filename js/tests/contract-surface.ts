@@ -1,6 +1,8 @@
+import { decodeWrappedKey, encodeWrappedKey } from "../../src/index.js";
 import type {
   CachedPRFResult,
   CreateAndWrapKeyInput,
+  EvaluateCredentialInput,
   PasskeyKeyManager,
   PasskeyKeyManagerConfig,
   PasskeyKeyProfile,
@@ -8,6 +10,7 @@ import type {
   RecoverKeyInput,
   RewrapKeyInput,
   WrappedKey,
+  WrappedKeyRecord,
 } from "../../src/index.js";
 
 type Equal<Left, Right> =
@@ -22,7 +25,6 @@ type ProfileFields = Assert<
     keyof PasskeyKeyProfile,
     | "version"
     | "relyingPartyId"
-    | "relyingPartyName"
     | "prfSalt"
     | "hkdfInfo"
   >
@@ -39,6 +41,7 @@ type ManagerMethods = Assert<
     | "capability"
     | "createAndWrapKey"
     | "recoverKey"
+    | "evaluateCredential"
     | "recoverKeyFromCache"
     | "rewrapKeyFromCache"
     | "clearLocalState"
@@ -46,7 +49,10 @@ type ManagerMethods = Assert<
   >
 >;
 type ManagerConfigFields = Assert<
-  Equal<keyof PasskeyKeyManagerConfig, "profile" | "timeoutMs" | "storage">
+  Equal<
+    keyof PasskeyKeyManagerConfig,
+    "profile" | "relyingPartyName" | "timeoutMs" | "storage"
+  >
 >;
 type CreateInputFields = Assert<
   Equal<keyof CreateAndWrapKeyInput, "user" | "key" | "signal">
@@ -54,10 +60,30 @@ type CreateInputFields = Assert<
 type RecoverInputFields = Assert<
   Equal<
     keyof RecoverKeyInput,
-    "wrappedKeys" | "preferredCredentialId" | "signal"
+    "wrappedKeys" | "preferredCredentialId" | "signal" | "interaction"
   >
 >;
 type RewrapInputFields = Assert<Equal<keyof RewrapKeyInput, "key">>;
+type EvaluateInputFields = Assert<
+  Equal<
+    keyof EvaluateCredentialInput,
+    "credentialIds" | "preferredCredentialId" | "signal" | "interaction"
+  >
+>;
+type WrappedKeyRecordFields = Assert<
+  Equal<
+    keyof WrappedKeyRecord,
+    "version" | "profile" | "credentialId" | "kekIvHex" | "wrappedKeyHex"
+  >
+>;
+type WrappedKeyRecordProfileFields = Assert<
+  Equal<
+    keyof WrappedKeyRecord["profile"],
+    "version" | "relyingPartyId" | "prfSalt" | "hkdfInfo"
+  >
+>;
+const encodeSignature: (wrappedKey: WrappedKey) => string = encodeWrappedKey;
+const decodeSignature: (json: string) => WrappedKey = decodeWrappedKey;
 type StorageMethods = Assert<
   Equal<
     PasskeyKeyStorage,
@@ -79,4 +105,9 @@ export type ContractSurface =
   | CreateInputFields
   | RecoverInputFields
   | RewrapInputFields
+  | EvaluateInputFields
+  | WrappedKeyRecordFields
+  | WrappedKeyRecordProfileFields
   | StorageMethods;
+
+export const contractCodec = { encodeSignature, decodeSignature };

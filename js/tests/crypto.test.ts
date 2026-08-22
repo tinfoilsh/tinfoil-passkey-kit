@@ -12,7 +12,6 @@ const encoder = new TextEncoder();
 const profile: PasskeyKeyProfile = {
   version: 1,
   relyingPartyId: "example.com",
-  relyingPartyName: "Example",
   prfSalt: encoder.encode("tinfoil-chat-key-encryption"),
   hkdfInfo: encoder.encode("tinfoil-chat-kek-v1"),
 };
@@ -80,6 +79,9 @@ describe("key wrapping", () => {
       expect.objectContaining({ category: "invalid_input" }),
     );
     expect(() => copyAndValidateProfile({ ...profile, version: 0 })).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
+    expect(() => copyAndValidateProfile({ ...profile, version: 2 })).toThrowError(
       expect.objectContaining({ category: "invalid_input" }),
     );
   });

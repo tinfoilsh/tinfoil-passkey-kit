@@ -8,6 +8,8 @@ import {
   bytesToHex,
   hexToBytes,
 } from "../../src/codec.js";
+import { decodeWrappedKey, encodeWrappedKey } from "../../src/wrapped-key-codec.js";
+import type { WrappedKey } from "../../src/types.js";
 
 describe("codec", () => {
   it("round-trips bytes through hex", () => {
@@ -47,5 +49,67 @@ describe("codec", () => {
     expect(copy).not.toBe(original);
     new Uint8Array(original)[0] = 99;
     expect(new Uint8Array(copy)[0]).toBe(1);
+  });
+});
+
+describe("wrapped key JSON codec", () => {
+  const wrappedKey: WrappedKey = {
+    profile: {
+      version: 1,
+      relyingPartyId: "example.com",
+      prfSalt: new Uint8Array([0, 255]),
+      hkdfInfo: new Uint8Array([1, 2, 3]),
+    },
+    credentialId: "AQID",
+    kekIvHex: "00".repeat(12),
+    wrappedKeyHex: "11".repeat(48),
+  };
+  const canonical =
+    '{"version":1,"profile":{"version":1,"relyingPartyId":"example.com","prfSalt":"AP8","hkdfInfo":"AQID"},"credentialId":"AQID","kekIvHex":"000000000000000000000000","wrappedKeyHex":"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"}';
+
+  it("emits exact cross-language canonical JSON", () => {
+    expect(encodeWrappedKey(wrappedKey)).toBe(canonical);
+    expect(decodeWrappedKey(canonical)).toEqual(wrappedKey);
+  });
+
+  it("accepts insignificant whitespace and any key order", () => {
+    const reordered = JSON.stringify({
+      wrappedKeyHex: wrappedKey.wrappedKeyHex,
+      credentialId: wrappedKey.credentialId,
+      profile: {
+        hkdfInfo: "AQID",
+        relyingPartyId: "example.com",
+        version: 1,
+        prfSalt: "AP8",
+      },
+      version: 1,
+      kekIvHex: wrappedKey.kekIvHex,
+    }, null, 2);
+    expect(decodeWrappedKey(reordered)).toEqual(wrappedKey);
+  });
+
+  it.each([
+    "not json",
+    "{}",
+    canonical.replace('"version":1', '"version":2'),
+    canonical.replace('"profile":{"version":1', '"profile":{"version":2'),
+    canonical.replace('"profile":{', '"extra":true,"profile":{'),
+    canonical.replace('"prfSalt":"AP8"', '"prfSalt":"AP8="'),
+    canonical.replace('"hkdfInfo":"AQID"', '"hkdfInfo":"***"'),
+    canonical.replace('"credentialId":"AQID"', '"credentialId":"AQID="'),
+    canonical.replace('"kekIvHex":"00', '"kekIvHex":"AA'),
+  ])("rejects malformed records", (value) => {
+    expect(() => decodeWrappedKey(value)).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
+  });
+
+  it("returns defensive profile byte copies", () => {
+    const first = decodeWrappedKey(canonical);
+    const second = decodeWrappedKey(canonical);
+    first.profile.prfSalt[0] = 99;
+    first.profile.hkdfInfo[0] = 99;
+    expect(second.profile.prfSalt).toEqual(new Uint8Array([0, 255]));
+    expect(second.profile.hkdfInfo).toEqual(new Uint8Array([1, 2, 3]));
   });
 });

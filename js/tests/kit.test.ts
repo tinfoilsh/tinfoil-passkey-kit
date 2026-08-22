@@ -12,7 +12,6 @@ const encoder = new TextEncoder();
 const profile: PasskeyKeyProfile = {
   version: 1,
   relyingPartyId: "example.com",
-  relyingPartyName: "Example",
   prfSalt: encoder.encode("test-prf"),
   hkdfInfo: encoder.encode("test-kek"),
 };
@@ -57,7 +56,11 @@ function credential(options: {
 function createManager(
   options: Partial<Parameters<typeof createPasskeyKeyManager>[0]> = {},
 ) {
-  return createPasskeyKeyManager({ profile, ...options });
+  return createPasskeyKeyManager({
+    profile,
+    relyingPartyName: "Example",
+    ...options,
+  });
 }
 
 async function createFixture(storage = createMemoryPasskeyKeyStorage()) {
@@ -352,6 +355,84 @@ describe("capability", () => {
     await expect(
       createManager().capability({ operation: "enroll" }),
     ).resolves.toBe("unknown");
+  });
+});
+
+describe("credential evaluation", () => {
+  it("returns a defensive raw PRF result and caches only with configured storage", async () => {
+    const rawPrf = new Uint8Array(32).map((_, index) => index);
+    const get = vi.fn(async () =>
+      credential({ rawId: new Uint8Array([1]), prf: rawPrf }),
+    );
+    installCredentials({ get } as Partial<CredentialsContainer>);
+    localStorage.clear();
+    const withoutStorage = createManager();
+    const uncached = await withoutStorage.evaluateCredential({ credentialIds: ["AQ"] });
+    expect(uncached).toEqual({
+      credentialId: "AQ",
+      prfResult: { output: new Uint8Array(32).map((_, index) => index) },
+    });
+    expect(localStorage.length).toBe(0);
+
+    const storage = createMemoryPasskeyKeyStorage();
+    const withStorage = createManager({ storage });
+    const evaluated = await withStorage.evaluateCredential({ credentialIds: ["AQ"] });
+    rawPrf[0] = 99;
+    evaluated.prfResult.output[1] = 99;
+    const cached = storage.loadCachedPRFResult();
+    expect(cached?.prfOutput[0]).toBe(0);
+    expect(cached?.prfOutput[1]).toBe(1);
+    expect(cached?.prfOutput).not.toBe(evaluated.prfResult.output);
+  });
+
+  it("supports interactive evaluation and rejects immediatelyAvailable before a ceremony", async () => {
+    const get = vi.fn(async () =>
+      credential({ rawId: new Uint8Array([1]), prf: new Uint8Array(32) }),
+    );
+    installCredentials({ get } as Partial<CredentialsContainer>);
+    const manager = createManager();
+    await expect(
+      manager.evaluateCredential({
+        credentialIds: ["AQ"],
+        interaction: "immediatelyAvailable",
+      }),
+    ).rejects.toMatchObject({ category: "unsupported" });
+    await expect(
+      manager.recoverKey({
+        wrappedKeys: [
+          {
+            profile,
+            credentialId: "AQ",
+            kekIvHex: "00".repeat(12),
+            wrappedKeyHex: "00".repeat(48),
+          },
+        ],
+        interaction: "immediatelyAvailable",
+      }),
+    ).rejects.toMatchObject({ category: "unsupported" });
+    expect(get).not.toHaveBeenCalled();
+    await expect(
+      manager.evaluateCredential({
+        credentialIds: ["AQ"],
+        interaction: "interactive",
+      }),
+    ).resolves.toMatchObject({ credentialId: "AQ" });
+    expect(get).toHaveBeenCalledOnce();
+  });
+
+  it("orders the preferred credential for direct evaluation", async () => {
+    const get = vi.fn(async (options: CredentialRequestOptions) => {
+      const ids = options.publicKey!.allowCredentials!.map((item) =>
+        bytesToBase64Url(new Uint8Array(bufferSourceToArrayBuffer(item.id))),
+      );
+      expect(ids).toEqual(["Ag", "AQ"]);
+      return credential({ rawId: new Uint8Array([2]), prf: new Uint8Array(32) });
+    });
+    installCredentials({ get } as Partial<CredentialsContainer>);
+    await createManager().evaluateCredential({
+      credentialIds: ["AQ", "Ag"],
+      preferredCredentialId: "Ag",
+    });
   });
 });
 
