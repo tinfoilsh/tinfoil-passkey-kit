@@ -32,7 +32,19 @@ retains the current PRF salt, HKDF info, AES-GCM, and hexadecimal field layout.
 
 ## Manager
 
-The conceptual surface is:
+JavaScript constructs a manager with exactly one required profile. Swift uses
+`PasskeyKeyManager(profile:storage:)` with the same requirement. Storage remains
+optional in both languages.
+
+```ts
+declare function createPasskeyKeyManager(input: {
+  profile: PasskeyKeyProfile;
+  storage?: PasskeyKeyStorage;
+}): PasskeyKeyManager;
+```
+
+Every manager operation uses that profile. No operation accepts a profile or
+profile override per call. The conceptual surface is:
 
 ```ts
 interface PasskeyKeyManager {
@@ -48,11 +60,13 @@ interface PasskeyKeyManager {
 }
 ```
 
-Creation accepts a profile, passkey user metadata, and a 32-byte key. Recovery
-accepts a profile and one or more wrapped keys, authenticates only against the
-listed credential IDs, and returns the matched credential ID and recovered
-key. Cache-only methods never start a ceremony and return `null` when no usable
-cached result exists. Storage failures do not discard a successful ceremony.
+Creation accepts passkey user metadata and a 32-byte key, then embeds the
+manager's full profile in the `WrappedKey`. Recovery accepts one or more wrapped
+keys, rejects any profile that does not exactly match the manager profile with
+`invalid_input`, authenticates only against the listed credential IDs, and
+returns the matched credential ID and recovered key. Cache-only methods never
+start a ceremony and return `null` when no usable matching-profile cache exists.
+Storage failures do not discard a successful ceremony.
 
 JavaScript uses the names shown above. Swift uses `PasskeyKeyManager`,
 `PasskeyKeyProfile`, and `WrappedKey`, with methods `capability(operation:)`,
@@ -74,7 +88,8 @@ The single `capability({ operation })` API distinguishes the requirements.
 `enroll` checks whether a PRF-capable platform authenticator can create a
 credential. `recover` checks whether a PRF assertion can be attempted and does
 not require platform attachment; a synced, cross-device, or security-key
-credential may recover a key.
+credential may recover a key. The manager profile is implicit and cannot be
+supplied to the capability call.
 
 ## Errors and lifecycle
 
@@ -110,6 +125,12 @@ a storage implementation. In v0.2 the interface is synchronous for simplicity
 and stores only the cached PRF result and local credential metadata:
 
 ```ts
+interface CachedPRFResult {
+  profile: PasskeyKeyProfile;
+  credentialId: string;
+  prfOutput: Uint8Array;
+}
+
 interface PasskeyKeyStorage {
   loadCachedPRFResult(): CachedPRFResult | null;
   saveCachedPRFResult(result: CachedPRFResult): void;
@@ -119,6 +140,9 @@ interface PasskeyKeyStorage {
 }
 ```
 
-Swift provides equivalent `PasskeyKeyStorage` requirements. These interfaces
-and examples do not prescribe browser, Keychain, hosted, or account storage.
+These are the five storage methods. None accepts a profile argument. A cached
+PRF result includes the full profile snapshot, and the manager rejects it unless
+that snapshot exactly matches its profile. Swift provides equivalent
+`PasskeyKeyStorage` requirements. These interfaces and examples do not
+prescribe browser, Keychain, hosted, or account storage.
 The generic public contract does not expose `deriveStableKeyId`.

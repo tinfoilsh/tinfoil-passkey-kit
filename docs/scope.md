@@ -8,13 +8,15 @@ and AES-GCM wrapping needed for that flow.
 ## In scope
 
 - JavaScript browser and Swift Apple APIs with equivalent models and behavior.
+- One required profile bound when each key manager is created; operations do
+  not accept per-call profiles.
 - Operation-specific capability reporting for enrollment and recovery.
 - Passkey creation and assertion ceremonies; recovery permits non-platform
   credentials.
 - Wrapping, recovering, and optionally rewrapping keys with a cached PRF result.
 - Exactly 32-byte keys for the first public scope.
 - Host-supplied, opt-in synchronous storage for PRF cache and credential
-  metadata.
+  metadata, with profile snapshots validated by the manager.
 - Adapters between generic kit models and existing Tinfoil application records.
 
 ## Out of scope

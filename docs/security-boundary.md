@@ -13,7 +13,8 @@ and briefly handles plaintext key bytes during wrap or recovery. Host code owns
 those bytes before wrapping and after recovery. Host-provided storage forms a
 separate trust boundary because a cached PRF result can derive the wrapping key.
 Storage is explicit opt-in and synchronous in v0.2; synchronous access does not
-make the stored secret safer.
+make the stored secret safer. Each cached result carries a full profile snapshot
+so the manager can reject state from another derivation domain.
 
 ## Challenge limitation
 
@@ -52,7 +53,9 @@ lowercase, even-length hexadecimal. The wire record does not carry assertions,
 challenges, PRF output, plaintext keys, or KEKs. A `PasskeyKeyProfile` contains
 exactly the version, relying-party ID and name, PRF salt, and HKDF info. An
 adapter may reconstruct that profile for a legacy record only when the
-application already knows its derivation contract.
+application already knows its derivation contract. A manager is bound to one
+profile and rejects wrapped keys or cached PRF results whose full profile does
+not match; callers cannot override the profile for an individual operation.
 
 This effort retains that layout. It introduces no new cryptographic format,
 server migration, downgrade protocol, compatibility negotiation, or generic
