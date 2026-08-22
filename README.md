@@ -73,39 +73,73 @@ Add this repository as a Swift Package Manager dependency and link the
 `TinfoilPasskeyKit` product. The package requires iOS 18 or macOS 15.
 
 ```swift
+import Foundation
 import TinfoilPasskeyKit
 
 @MainActor
-func configurePasskeyKit() async throws {
-    let store = KeychainPasskeyStateStore(
+func protectKey(
+    _ key: Data,
+    presentationAnchorProvider: any PasskeyPresentationAnchorProviding
+) async throws {
+    let profile = try PasskeyKeyProfile(
+        version: 1,
+        relyingPartyId: "example.com",
+        prfSalt: Data("example-key-wrapping".utf8),
+        hkdfInfo: Data("example-wrapping-key-v1".utf8)
+    )
+    let storage = KeychainPasskeyKeyStorage(
         service: "example.com",
         account: "com.example.passkey-prf",
         localCredentialIdKey: "com.example.local-passkey-id"
     )
-    let kit = PasskeyKit(
-        configuration: PasskeyKitConfiguration(
-            rpId: "example.com",
-            rpName: "Example App",
-            stateStore: store
-        )
+    let manager = try PasskeyKeyManager(
+        profile: profile,
+        relyingPartyName: "Example App",
+        storage: storage,
+        presentationAnchorProvider: presentationAnchorProvider
     )
 
-    let cek = try PasskeyCrypto.generateCEK()
-    let enrollment = try await kit.enroll(
-        user: PasskeyUser(id: userId, name: email, displayName: displayName),
-        cek: cek
+    let created = try await manager.createAndWrapKey(
+        user: PasskeyUser(id: opaqueUserHandle, name: email, displayName: displayName),
+        key: key
     )
-    await saveToServer(enrollment.wrappedCEK)
+    let record = try encodeWrappedKeyRecord(created.wrappedKey)
+    await saveToServer(record)
 
-    let unlocked = try await kit.unlock(wrappedCEKsFromServer)
-    useCEK(unlocked.cek)
+    let wrappedKey = try decodeWrappedKeyRecord(recordFromServer)
+    let recovered = try await manager.recoverKey(wrappedKeys: [wrappedKey])
+    useKey(recovered.key)
 }
 ```
 
-The optional `KeychainPasskeyStateStore` stores cached PRF output with
-`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. No state store is selected by
-default. The host app must provide the `webcredentials` associated-domain
-entitlement for its relying-party domain.
+`evaluateCredential` supports advanced and legacy flows that need direct PRF
+evaluation. Its `prfResult.output` is raw secret key material. Do not log,
+transmit, or retain it longer than necessary. Pass `.immediatelyAvailable` as
+the interaction to restrict evaluation to credentials Apple can offer without
+the full interactive flow.
+
+Apple hosts must pass a `PasskeyPresentationAnchorProviding` implementation to
+the manager as `presentationAnchorProvider`. The provider returns the iOS or
+macOS window AuthenticationServices uses for interactive presentation. Making
+it required prevents constructing a manager that cannot present a ceremony.
+AuthenticationServices does not accept the configured `relyingPartyName`; Apple
+derives relying-party presentation from system and associated-domain metadata.
+
+Persistence is disabled by default. `KeychainPasskeyKeyStorage` is an optional
+generic Apple adapter that stores cached PRF output with
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Its records are device-bound and
+unavailable while the device is locked, but any process context that can read
+the item can recover keys without another passkey prompt. Choose storage based
+on the host app's threat model. The host app must also provide the
+`webcredentials` associated-domain entitlement for its relying-party domain.
+Keychain operations are synchronous and can block the manager's main actor.
+
+On iOS 18 and macOS 15, recovery supports platform and synced passkeys,
+including Apple's cross-device passkey flow. Explicit security-key PRF is not
+currently enabled in the Apple target because the baseline toolchain does not
+provide that API. Browsers may support security-key or hybrid recovery.
+Capability remains `unknown` when Apple cannot preflight PRF support; callers
+should allow an attempt.
 
 ## Protocol
 
