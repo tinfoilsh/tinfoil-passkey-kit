@@ -12,6 +12,8 @@ import type {
   PasskeyKeyStorage,
   RecoverKeyInput,
   RewrapKeyInput,
+  UnwrapKeyWithPRFResultInput,
+  WrapKeyWithPRFResultInput,
   WrappedKey,
   WrappedKeyRecord,
 } from "../../src/index.js";
@@ -45,6 +47,8 @@ type ManagerMethods = Assert<
     | "createAndWrapKey"
     | "recoverKey"
     | "evaluateCredential"
+    | "wrapKeyWithPRFResult"
+    | "unwrapKeyWithPRFResult"
     | "recoverKeyFromCache"
     | "rewrapKeyFromCache"
     | "clearLocalState"
@@ -67,6 +71,15 @@ type RecoverInputFields = Assert<
   >
 >;
 type RewrapInputFields = Assert<Equal<keyof RewrapKeyInput, "key">>;
+type WrapWithPRFInputFields = Assert<
+  Equal<
+    keyof WrapKeyWithPRFResultInput,
+    "keyMaterial" | "credentialId" | "prfResult"
+  >
+>;
+type UnwrapWithPRFInputFields = Assert<
+  Equal<keyof UnwrapKeyWithPRFResultInput, "wrappedKey" | "prfResult">
+>;
 type EvaluateInputFields = Assert<
   Equal<
     keyof EvaluateCredentialInput,
@@ -108,6 +121,8 @@ export type ContractSurface =
   | CreateInputFields
   | RecoverInputFields
   | RewrapInputFields
+  | WrapWithPRFInputFields
+  | UnwrapWithPRFInputFields
   | EvaluateInputFields
   | WrappedKeyRecordFields
   | WrappedKeyRecordProfileFields

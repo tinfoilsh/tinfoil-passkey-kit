@@ -17,6 +17,8 @@ import type {
   PasskeyKeyManagerConfig,
   PasskeyUser,
   RecoverKeyInput,
+  UnwrapKeyWithPRFResultInput,
+  WrapKeyWithPRFResultInput,
   WrappedKey,
 } from "./types.js";
 import {
@@ -245,6 +247,53 @@ export function createPasskeyKeyManager(
     return [preferred, ...unique.filter((credentialId) => credentialId !== preferred)];
   }
 
+  function copyPRFOutput(
+    prfResult: { output: Uint8Array },
+    operation: string,
+  ): Uint8Array {
+    if (
+      !prfResult ||
+      typeof prfResult !== "object" ||
+      !(prfResult.output instanceof Uint8Array) ||
+      prfResult.output.length !== 32
+    ) {
+      throw invalidInput("prfResult.output must be exactly 32 bytes", operation);
+    }
+    return prfResult.output.slice();
+  }
+
+  async function wrapKeyWithPRFResult(
+    input: WrapKeyWithPRFResultInput,
+    operation = "wrapKeyWithPRFResult",
+  ): Promise<WrappedKey> {
+    if (!input || typeof input !== "object") throw invalidInput("input is required", operation);
+    validateKey(input.keyMaterial, operation);
+    validateCredentialId(input.credentialId);
+    const keyMaterial = input.keyMaterial.slice();
+    const prfOutput = copyPRFOutput(input.prfResult, operation);
+    return wrapKey(
+      profile,
+      input.credentialId,
+      prfOutput,
+      keyMaterial,
+      operation,
+    );
+  }
+
+  async function unwrapKeyWithPRFResult(
+    input: UnwrapKeyWithPRFResultInput,
+    operation = "unwrapKeyWithPRFResult",
+  ): Promise<Uint8Array> {
+    if (!input || typeof input !== "object") throw invalidInput("input is required", operation);
+    const wrappedKey = {
+      ...input.wrappedKey,
+      profile: copyAndValidateProfile(input.wrappedKey?.profile),
+    };
+    validateWrappedKey(wrappedKey, profile);
+    const prfOutput = copyPRFOutput(input.prfResult, operation);
+    return unwrapKey(profile, prfOutput, wrappedKey, operation);
+  }
+
   async function createAndWrapKey(input: CreateAndWrapKeyInput) {
     if (!input || typeof input !== "object") throw invalidInput("input is required");
     validateKey(input.key, "createAndWrapKey");
@@ -254,11 +303,13 @@ export function createPasskeyKeyManager(
       createPrfCredential(context(profile, relyingPartyName, timeoutMs), user, signal),
     );
     recordSuccessfulCredential(result);
-    const wrappedKey = await wrapKey(
-      profile,
-      result.credentialId,
-      result.prfOutput,
-      key,
+    const wrappedKey = await wrapKeyWithPRFResult(
+      {
+        keyMaterial: key,
+        credentialId: result.credentialId,
+        prfResult: { output: result.prfOutput },
+      },
+      "createAndWrapKey",
     );
     return { credentialId: result.credentialId, wrappedKey };
   }
@@ -322,6 +373,14 @@ export function createPasskeyKeyManager(
       return evaluateCredential(input);
     },
 
+    wrapKeyWithPRFResult(input) {
+      return wrapKeyWithPRFResult(input);
+    },
+
+    unwrapKeyWithPRFResult(input) {
+      return unwrapKeyWithPRFResult(input);
+    },
+
     async recoverKey(input) {
       const wrappedKeys = prepareRecovery(input);
       const result = await evaluateCredential(
@@ -339,7 +398,10 @@ export function createPasskeyKeyManager(
       if (!wrapped) throw invalidInput("credential has no matching wrapped key", "recoverKey");
       return {
         credentialId: result.credentialId,
-        key: await unwrapKey(profile, result.prfResult.output, wrapped),
+        key: await unwrapKeyWithPRFResult(
+          { wrappedKey: wrapped, prfResult: result.prfResult },
+          "recoverKey",
+        ),
       };
     },
 
@@ -354,7 +416,13 @@ export function createPasskeyKeyManager(
       try {
         return {
           credentialId: cached.credentialId,
-          key: await unwrapKey(profile, cached.prfOutput, wrapped),
+          key: await unwrapKeyWithPRFResult(
+            {
+              wrappedKey: wrapped,
+              prfResult: { output: cached.prfOutput },
+            },
+            "recoverKeyFromCache",
+          ),
         };
       } catch {
         return null;
@@ -366,7 +434,14 @@ export function createPasskeyKeyManager(
       validateKey(input.key, "rewrapKeyFromCache");
       const cached = loadCachedResult();
       if (!cached) return null;
-      return wrapKey(profile, cached.credentialId, cached.prfOutput, input.key.slice());
+      return wrapKeyWithPRFResult(
+        {
+          keyMaterial: input.key,
+          credentialId: cached.credentialId,
+          prfResult: { output: cached.prfOutput },
+        },
+        "rewrapKeyFromCache",
+      );
     },
 
     clearLocalState() {

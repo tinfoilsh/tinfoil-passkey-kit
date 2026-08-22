@@ -142,9 +142,10 @@ export async function wrapKey(
   credentialId: string,
   prfOutput: Uint8Array,
   key: Uint8Array,
+  operation = "createAndWrapKey",
 ): Promise<WrappedKey> {
   validateCredentialId(credentialId);
-  validateKey(key, "createAndWrapKey");
+  validateKey(key, operation);
   try {
     const wrappingKey = await deriveWrappingKey(prfOutput, profile);
     const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
@@ -161,7 +162,7 @@ export async function wrapKey(
     };
   } catch (cause) {
     if (cause instanceof PasskeyKeyError) throw cause;
-    throw operationFailed("failed to wrap key", cause, "createAndWrapKey");
+    throw operationFailed("failed to wrap key", cause, operation);
   }
 }
 
@@ -169,6 +170,7 @@ export async function unwrapKey(
   profile: PasskeyKeyProfile,
   prfOutput: Uint8Array,
   wrapped: WrappedKey,
+  operation = "recoverKey",
 ): Promise<Uint8Array> {
   validateWrappedKey(wrapped, profile);
   try {
@@ -179,10 +181,10 @@ export async function unwrapKey(
       hexToBytes(wrapped.wrappedKeyHex) as BufferSource,
     );
     const key = new Uint8Array(plaintext);
-    validateKey(key, "recoverKey");
+    validateKey(key, operation);
     return key;
   } catch (cause) {
     if (cause instanceof PasskeyKeyError) throw cause;
-    throw operationFailed("failed to recover key", cause, "recoverKey");
+    throw operationFailed("failed to recover key", cause, operation);
   }
 }

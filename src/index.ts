@@ -25,6 +25,8 @@ export type {
   RecoveredKey,
   RecoverKeyInput,
   RewrapKeyInput,
+  UnwrapKeyWithPRFResultInput,
+  WrapKeyWithPRFResultInput,
   WrappedKey,
   WrappedKeyRecord,
 } from "./types.js";

@@ -436,6 +436,115 @@ describe("credential evaluation", () => {
   });
 });
 
+describe("explicit PRF key operations", () => {
+  it("wraps and unwraps defensive copies without storage or ceremonies", async () => {
+    const storage = {
+      loadCachedPRFResult: vi.fn(() => null),
+      saveCachedPRFResult: vi.fn(),
+      loadLocalCredentialId: vi.fn(() => null),
+      saveLocalCredentialId: vi.fn(),
+      clear: vi.fn(),
+    };
+    const create = vi.fn();
+    const get = vi.fn();
+    installCredentials({ create, get } as Partial<CredentialsContainer>);
+    const manager = createManager({ storage });
+    const keyMaterial = new Uint8Array(32).map((_, index) => index);
+    const prfOutput = new Uint8Array(32).map((_, index) => 255 - index);
+    const expectedKey = keyMaterial.slice();
+    const expectedPRF = prfOutput.slice();
+    const pendingWrap = manager.wrapKeyWithPRFResult({
+      keyMaterial,
+      credentialId: "AQ",
+      prfResult: { output: prfOutput },
+    });
+    keyMaterial.fill(0);
+    prfOutput.fill(0);
+    const wrappedKey = await pendingWrap;
+    const unwrapPRF = expectedPRF.slice();
+    const pendingUnwrap = manager.unwrapKeyWithPRFResult({
+      wrappedKey,
+      prfResult: { output: unwrapPRF },
+    });
+    unwrapPRF.fill(0);
+    await expect(pendingUnwrap).resolves.toEqual(expectedKey);
+    expect(create).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
+    for (const method of Object.values(storage)) expect(method).not.toHaveBeenCalled();
+  });
+
+  it("validates key, PRF, credential, profile, and authenticated ciphertext", async () => {
+    const manager = createManager();
+    const prfResult = { output: new Uint8Array(32) };
+    await expect(
+      manager.wrapKeyWithPRFResult({
+        keyMaterial: new Uint8Array(31),
+        credentialId: "AQ",
+        prfResult,
+      }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+    await expect(
+      manager.wrapKeyWithPRFResult({
+        keyMaterial: new Uint8Array(32),
+        credentialId: "AB",
+        prfResult,
+      }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+    await expect(
+      manager.wrapKeyWithPRFResult({
+        keyMaterial: new Uint8Array(32),
+        credentialId: "AQ",
+        prfResult: { output: new Uint8Array(31) },
+      }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+
+    const wrappedKey = await manager.wrapKeyWithPRFResult({
+      keyMaterial: new Uint8Array(32),
+      credentialId: "AQ",
+      prfResult,
+    });
+    await expect(
+      manager.unwrapKeyWithPRFResult({
+        wrappedKey: {
+          ...wrappedKey,
+          profile: { ...profile, hkdfInfo: encoder.encode("other") },
+        },
+        prfResult,
+      }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+    await expect(
+      manager.unwrapKeyWithPRFResult({
+        wrappedKey: {
+          ...wrappedKey,
+          wrappedKeyHex: `${wrappedKey.wrappedKeyHex[0] === "0" ? "1" : "0"}${wrappedKey.wrappedKeyHex.slice(1)}`,
+        },
+        prfResult,
+      }),
+    ).rejects.toMatchObject({ category: "operation_failed" });
+  });
+
+  it("does not occupy or inspect the active ceremony slot", async () => {
+    installCredentials({
+      create: vi.fn(() => new Promise(() => {})),
+    } as Partial<CredentialsContainer>);
+    const manager = createManager();
+    const ceremony = manager.createAndWrapKey({
+      user,
+      key: new Uint8Array(32),
+    });
+    ceremony.catch(() => {});
+    await expect(
+      manager.wrapKeyWithPRFResult({
+        keyMaterial: new Uint8Array(32),
+        credentialId: "AQ",
+        prfResult: { output: new Uint8Array(32) },
+      }),
+    ).resolves.toBeDefined();
+    manager.cancelActiveCeremony();
+    await expect(ceremony).rejects.toMatchObject({ category: "cancelled" });
+  });
+});
+
 describe("ceremony lifecycle", () => {
   it("maps NotAllowed to cancelled with its documented ambiguity", async () => {
     installCredentials({

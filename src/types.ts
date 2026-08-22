@@ -57,6 +57,17 @@ export interface EvaluatedCredential {
   prfResult: PRFResult;
 }
 
+export interface WrapKeyWithPRFResultInput {
+  keyMaterial: Uint8Array;
+  credentialId: string;
+  prfResult: PRFResult;
+}
+
+export interface UnwrapKeyWithPRFResultInput {
+  wrappedKey: WrappedKey;
+  prfResult: PRFResult;
+}
+
 export interface RecoveredKey {
   credentialId: string;
   key: Uint8Array;
@@ -80,6 +91,8 @@ export interface PasskeyKeyManager {
   createAndWrapKey(input: CreateAndWrapKeyInput): Promise<CreatedWrappedKey>;
   recoverKey(input: RecoverKeyInput): Promise<RecoveredKey>;
   evaluateCredential(input: EvaluateCredentialInput): Promise<EvaluatedCredential>;
+  wrapKeyWithPRFResult(input: WrapKeyWithPRFResultInput): Promise<WrappedKey>;
+  unwrapKeyWithPRFResult(input: UnwrapKeyWithPRFResultInput): Promise<Uint8Array>;
   recoverKeyFromCache(input: RecoverKeyInput): Promise<RecoveredKey | null>;
   rewrapKeyFromCache(input: RewrapKeyInput): Promise<WrappedKey | null>;
   clearLocalState(): void;
