@@ -1,22 +1,22 @@
 # Tinfoil Passkey Kit
 
-Cross-platform SDKs for protecting key material with passkeys and
-the WebAuthn PRF extension. The JavaScript and Swift implementations share the
-same profile-driven wire format, so either client can recover a CEK wrapped by
-the other.
+JavaScript and Swift libraries for wrapping 32-byte keys with passkeys and the
+WebAuthn PRF extension. Both implementations use the same profile-driven wire
+format and can recover records produced by the other.
 
-- Passkey creation and authentication with PRF
-- HKDF-SHA-256 key-encryption-key derivation
-- AES-256-GCM CEK wrapping and unwrapping
-- Optional device-local PRF and credential persistence
+This kit performs local key wrapping. It does not log users in, authenticate a
+session to a server, or provide hosted storage.
 
-## JavaScript
+## JavaScript quickstart
 
 Install the browser package:
 
 ```sh
 npm install @tinfoilsh/passkey-kit
 ```
+
+Create one explicit version 1 profile and keep every field stable for existing
+records. The display name belongs to manager configuration, not the profile.
 
 ```ts
 import {
@@ -25,33 +25,54 @@ import {
   encodeWrappedKeyRecord,
 } from "@tinfoilsh/passkey-kit";
 
+const encoder = new TextEncoder();
 const profile = {
   version: 1,
   relyingPartyId: "example.com",
-  prfSalt: new TextEncoder().encode("example-key-wrapping"),
-  hkdfInfo: new TextEncoder().encode("example-wrapping-key-v1"),
+  prfSalt: encoder.encode("example-key-wrapping"),
+  hkdfInfo: encoder.encode("example-wrapping-key-v1"),
 };
 const manager = createPasskeyKeyManager({
   profile,
   relyingPartyName: "Example App",
 });
+const key = crypto.getRandomValues(new Uint8Array(32));
 
 const created = await manager.createAndWrapKey({
-  user: { id: opaqueUserHandle, name: email, displayName },
+  user: {
+    id: crypto.getRandomValues(new Uint8Array(32)),
+    name: "person@example.com",
+    displayName: "Example Person",
+  },
   key,
 });
-await api.saveWrappedKey(created.wrappedKey);
-const canonicalRecord = encodeWrappedKeyRecord(created.wrappedKey);
-const wrappedKey = decodeWrappedKeyRecord(canonicalRecord);
+await wrappedKeyRepository.save(encodeWrappedKeyRecord(created.wrappedKey));
 
-const recovered = await manager.recoverKey({
-  wrappedKeys: [wrappedKey],
-});
+const records: string[] = await wrappedKeyRepository.list();
+const wrappedKeys = records.map(decodeWrappedKeyRecord);
+const recovered = await manager.recoverKey({ wrappedKeys });
 useKey(recovered.key);
 ```
 
+`evaluateCredential` is available for advanced migrations that need direct PRF
+evaluation:
+
+```ts
+const evaluated = await manager.evaluateCredential({
+  credentialIds: wrappedKeys.map(({ credentialId }) => credentialId),
+});
+usePRFOutput(evaluated.prfResult.output);
+evaluated.prfResult.output.fill(0);
+```
+
+Treat PRF output as secret key material and prefer `recoverKey` for normal
+recovery. `wrappedKeyRepository` is application-owned. See the minimal
+[repository interface](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/docs/wrapped-key-repository.md)
+and runnable [web example](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/Examples/Web/README.md).
+
 Ceremony failures throw `PasskeyKeyError`. Branch on its stable `category`, not
-its message.
+its message. Local PRF caching is disabled unless the application supplies a
+`PasskeyKeyStorage`; cached PRF output is secret key material.
 
 Persistence is disabled by default. Cached recovery and rewrap require an
 explicit synchronous `PasskeyKeyStorage`. Cached PRF output is raw secret key
@@ -67,7 +88,7 @@ insecure because same-origin scripts can read the cached secret material.
 recovery. `wrapKeyWithPRFResult` and `unwrapKeyWithPRFResult` perform explicit
 crypto-only operations without starting a ceremony or accessing storage.
 
-## Swift
+## Swift quickstart
 
 Add this repository as a Swift Package Manager dependency and link the
 `TinfoilPasskeyKit` product. The package requires iOS 18 or macOS 15.
@@ -87,36 +108,32 @@ func protectKey(
         prfSalt: Data("example-key-wrapping".utf8),
         hkdfInfo: Data("example-wrapping-key-v1".utf8)
     )
-    let storage = KeychainPasskeyKeyStorage(
-        service: "example.com",
-        account: "com.example.passkey-prf",
-        localCredentialIdKey: "com.example.local-passkey-id"
-    )
     let manager = try PasskeyKeyManager(
         profile: profile,
         relyingPartyName: "Example App",
-        storage: storage,
         presentationAnchorProvider: presentationAnchorProvider
     )
 
     let created = try await manager.createAndWrapKey(
-        user: PasskeyUser(id: opaqueUserHandle, name: email, displayName: displayName),
+        user: PasskeyUser(
+            id: opaqueUserHandle,
+            name: "person@example.com",
+            displayName: "Example Person"
+        ),
         key: key
     )
-    let record = try encodeWrappedKeyRecord(created.wrappedKey)
-    await saveToServer(record)
+    await wrappedKeyRepository.save(try encodeWrappedKeyRecord(created.wrappedKey))
 
-    let wrappedKey = try decodeWrappedKeyRecord(recordFromServer)
-    let recovered = try await manager.recoverKey(wrappedKeys: [wrappedKey])
+    let records: [Data] = await wrappedKeyRepository.list()
+    let wrappedKeys = try records.map(decodeWrappedKeyRecord)
+    let recovered = try await manager.recoverKey(wrappedKeys: wrappedKeys)
     useKey(recovered.key)
 }
 ```
 
-`evaluateCredential` supports advanced and legacy flows that need direct PRF
-evaluation. Its `prfResult.output` is raw secret key material. Do not log,
-transmit, or retain it longer than necessary. Pass `.immediatelyAvailable` as
-the interaction to restrict evaluation to credentials Apple can offer without
-the full interactive flow.
+Advanced flows can call `evaluateCredential(credentialIds:interaction:)`.
+Its `prfResult.output` is raw secret key material. Do not log, transmit, or
+retain it longer than necessary.
 
 Apple hosts must pass a `PasskeyPresentationAnchorProviding` implementation to
 the manager as `presentationAnchorProvider`. The provider returns the iOS or
@@ -141,40 +158,27 @@ provide that API. Browsers may support security-key or hybrid recovery.
 Capability remains `unknown` when Apple cannot preflight PRF support; callers
 should allow an attempt.
 
-## Protocol
-
-Both implementations use the PRF salt and HKDF info supplied by the profile.
-These values must remain identical across clients that wrap the same key.
-
-The existing Tinfoil server adapter persists only:
-
-- The unpadded base64url credential ID
-- The 12-byte AES-GCM IV as lowercase hexadecimal
-- The wrapped CEK ciphertext and 16-byte authentication tag as lowercase
-  hexadecimal
-
-The adapter reconstructs the known profile when reading these legacy records.
-
-User identity, server persistence, associated-domain configuration, and
-recovery UI remain the host application's responsibility.
+See the compilable [Apple example](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/Examples/Apple/README.md).
 
 ## Documentation
 
-- [Scope](docs/scope.md)
-- [API contract](docs/api-contract.md)
-- [Security boundary](docs/security-boundary.md)
-- [Tinfoil integration boundary](docs/tinfoil-integration-boundary.md)
-
-## License
-
-Apache License 2.0. See [LICENSE](LICENSE).
+- [API contract](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/docs/api-contract.md)
+- [Support matrix](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/docs/support-matrix.md)
+- [Security boundary](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/docs/security-boundary.md)
+- [Scope](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/docs/scope.md)
+- [Contributing](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/CONTRIBUTING.md)
+- [Security policy](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/SECURITY.md)
 
 ## Development
 
 ```sh
-npm install
+npm ci
 npm test
 npm run typecheck
 npm run build
 swift test
 ```
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).
