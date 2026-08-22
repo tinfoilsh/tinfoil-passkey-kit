@@ -10,6 +10,7 @@ permissions: {}
 
 jobs:
   release:
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -28,8 +29,26 @@ jobs:
           package-manager-cache: false
 
       - name: Validate release tag
-        if: github.ref_type == 'tag'
-        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+
+          const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version;
+          const numericIdentifier = "(?:0|[1-9]\\d*)";
+          const prereleaseIdentifier = "(?:0|[1-9]\\d*|\\d*[A-Za-z-][0-9A-Za-z-]*)";
+          const semver = new RegExp(
+            `^v${numericIdentifier}\\.${numericIdentifier}\\.${numericIdentifier}` +
+            `(?:-${prereleaseIdentifier}(?:\\.${prereleaseIdentifier})*)?` +
+            `(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`,
+          );
+          const tag = process.env.GITHUB_REF_NAME;
+          if (!semver.test(tag)) throw new Error(`release tag is not SemVer: ${tag}`);
+          if (tag !== `v${packageVersion}`) {
+            throw new Error(`release tag ${tag} does not match package version ${packageVersion}`);
+          }
+          NODE
+          git fetch origin main:refs/remotes/origin/main
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
 
       - name: Install dependencies
         run: npm ci
@@ -47,7 +66,6 @@ jobs:
         run: npm publish --access public --provenance
 
       - name: Create GitHub release
-        if: github.ref_type == 'tag'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release create "$GITHUB_REF_NAME" --generate-notes
