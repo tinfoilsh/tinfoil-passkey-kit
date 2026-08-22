@@ -11,21 +11,59 @@ permissions:
 jobs:
   javascript:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [20, 22]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
-      - run: node -e "import('./dist/index.js').then(m => { if (!m.createPasskeyKeyManager) process.exit(1) })"
-      - run: npm pack --dry-run
+      - name: Pack and import package root
+        if: matrix.node-version == 20
+        run: |
+          tarball=$(npm pack --silent)
+          smoke_dir=$(mktemp -d)
+          npm install --prefix "$smoke_dir" "$PWD/$tarball"
+          PACKAGE_DIR="$smoke_dir/node_modules/@tinfoilsh/passkey-kit" \
+            node --input-type=module <<'NODE'
+          import { existsSync, readFileSync, readdirSync } from "node:fs";
+          import { dirname, join, resolve } from "node:path";
+
+          const root = process.env.PACKAGE_DIR;
+          const required = ["LICENSE", "README.md", "dist/index.js", "dist/index.d.ts", "src/index.ts"];
+          const forbidden = ["js", "Tests", "Sources", "Fixtures", "Examples", "docs", ".build", ".github"];
+          for (const path of required) {
+            if (!existsSync(join(root, path))) throw new Error(`missing package content: ${path}`);
+          }
+          for (const path of forbidden) {
+            if (existsSync(join(root, path))) throw new Error(`unexpected package content: ${path}`);
+          }
+          for (const file of readdirSync(join(root, "dist")).filter((file) => file.endsWith(".map"))) {
+            const mapPath = join(root, "dist", file);
+            const map = JSON.parse(readFileSync(mapPath, "utf8"));
+            for (const source of map.sources) {
+              if (!existsSync(resolve(dirname(mapPath), source))) {
+                throw new Error(`unresolved map source: ${file} -> ${source}`);
+              }
+            }
+          }
+          NODE
+          (
+            cd "$smoke_dir"
+            node --input-type=module -e \
+              "import { createPasskeyKeyManager, decodeWrappedKeyRecord, encodeWrappedKeyRecord } from '@tinfoilsh/passkey-kit'; if ([createPasskeyKeyManager, decodeWrappedKeyRecord, encodeWrappedKeyRecord].some(value => typeof value !== 'function')) process.exit(1)"
+          )
 
   swift:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - run: swift test
+      - run: swift build -c release -Xswiftc -strict-concurrency=complete
+      - run: swift build --package-path Examples/Apple -c release -Xswiftc -strict-concurrency=complete
