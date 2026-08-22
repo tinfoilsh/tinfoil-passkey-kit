@@ -21,7 +21,7 @@ jobs:
       - run: npm test
       - run: npm run typecheck
       - run: npm run build
-      - run: node -e "import('./dist/index.js').then(m => { if (!m.createPasskeyKit) process.exit(1) })"
+      - run: node -e "import('./dist/index.js').then(m => { if (!m.createPasskeyKeyManager) process.exit(1) })"
       - run: npm pack --dry-run
 
   swift:
