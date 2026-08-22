@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Passkey key wrapping example</title>
+    <style>
+      :root { color-scheme: light; font-family: Georgia, serif; background: #f5f0e7; color: #17352c; }
+      body { max-width: 42rem; margin: 10vh auto; padding: 1.5rem; }
+      main { padding: 2rem; border: 1px solid #b8aa91; background: #fffdf7; box-shadow: 0.5rem 0.5rem 0 #d6c8ad; }
+      button { margin-right: 0.5rem; padding: 0.7rem 1rem; border: 0; background: #17352c; color: white; font: inherit; cursor: pointer; }
+      code { font-family: ui-monospace, monospace; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Passkey key wrapping</h1>
+      <p>This example wraps a generated key. It does not log in or authenticate a user to a server.</p>
+      <button id="enroll" type="button">Enroll and wrap</button>
+      <button id="recover" type="button">Recover key</button>
+      <button id="evaluate" type="button">Evaluate PRF</button>
+      <p id="status" role="status">No wrapped key is stored.</p>
+    </main>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
