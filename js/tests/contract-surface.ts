@@ -1,8 +1,10 @@
 import type {
+  CachedPRFResult,
   CreateAndWrapKeyInput,
   PasskeyKeyManager,
   PasskeyKeyManagerConfig,
   PasskeyKeyProfile,
+  PasskeyKeyStorage,
   RecoverKeyInput,
   RewrapKeyInput,
   WrappedKey,
@@ -56,6 +58,18 @@ type RecoverInputFields = Assert<
   >
 >;
 type RewrapInputFields = Assert<Equal<keyof RewrapKeyInput, "key">>;
+type StorageMethods = Assert<
+  Equal<
+    PasskeyKeyStorage,
+    {
+      loadCachedPRFResult(): CachedPRFResult | null;
+      saveCachedPRFResult(result: CachedPRFResult): void;
+      loadLocalCredentialId(): string | null;
+      saveLocalCredentialId(credentialId: string): void;
+      clear(): void;
+    }
+  >
+>;
 
 export type ContractSurface =
   | ProfileFields
@@ -64,4 +78,5 @@ export type ContractSurface =
   | ManagerConfigFields
   | CreateInputFields
   | RecoverInputFields
-  | RewrapInputFields;
+  | RewrapInputFields
+  | StorageMethods;

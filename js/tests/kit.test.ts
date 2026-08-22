@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bufferSourceToArrayBuffer, bytesToBase64Url } from "../../src/codec.js";
 import { createPasskeyKeyManager } from "../../src/kit.js";
-import { createMemoryPasskeyKeyStorage } from "../../src/storage.js";
+import {
+  createInsecureBrowserLocalStoragePasskeyKeyStorage,
+  createMemoryPasskeyKeyStorage,
+} from "../../src/storage.js";
 import type { PasskeyKeyProfile, WrappedKey } from "../../src/types.js";
 
 const originalCredentials = navigator.credentials;
@@ -123,7 +126,7 @@ describe("contract flows", () => {
     ).resolves.toBeNull();
 
     const { manager, storage, created: cached } = await createFixture();
-    expect(storage.loadCachedPRFResult(profile)?.credentialId).toBe(cached.credentialId);
+    expect(storage.loadCachedPRFResult()?.credentialId).toBe(cached.credentialId);
     const stranger: WrappedKey = { ...cached.wrappedKey, credentialId: "BAUG" };
     await expect(
       manager.recoverKeyFromCache({ wrappedKeys: [stranger] }),
@@ -155,7 +158,7 @@ describe("contract flows", () => {
     expect(rewrapped?.credentialId).toBe("Ag");
   });
 
-  it("isolates cached credentials by the complete profile", async () => {
+  it("rejects the latest cached credential from another profile", async () => {
     const otherProfile: PasskeyKeyProfile = {
       ...profile,
       hkdfInfo: encoder.encode("other-kek"),
@@ -179,11 +182,10 @@ describe("contract flows", () => {
     });
     await secondManager.createAndWrapKey({ user, key: new Uint8Array(32) });
 
-    expect(storage.loadCachedPRFResult(profile)?.credentialId).toBe("AQ");
-    expect(storage.loadCachedPRFResult(otherProfile)?.credentialId).toBe("Ag");
+    expect(storage.loadCachedPRFResult()?.credentialId).toBe("Ag");
     await expect(
       firstManager.rewrapKeyFromCache({ key: new Uint8Array(32) }),
-    ).resolves.toMatchObject({ credentialId: "AQ" });
+    ).resolves.toBeNull();
     await expect(
       secondManager.rewrapKeyFromCache({ key: new Uint8Array(32) }),
     ).resolves.toMatchObject({ credentialId: "Ag" });
@@ -214,6 +216,32 @@ describe("contract flows", () => {
     await expect(
       manager.rewrapKeyFromCache({ key: new Uint8Array(32) }),
     ).resolves.toBeNull();
+  });
+
+  it("namespaces browser storage without changing the storage interface", () => {
+    const first = createInsecureBrowserLocalStoragePasskeyKeyStorage("first");
+    const second = createInsecureBrowserLocalStoragePasskeyKeyStorage("second");
+    const cached = {
+      profile: {
+        ...profile,
+        prfSalt: profile.prfSalt.slice(),
+        hkdfInfo: profile.hkdfInfo.slice(),
+      },
+      credentialId: "AQ",
+      prfOutput: new Uint8Array(32).fill(7),
+    };
+    first.saveCachedPRFResult(cached);
+    first.saveLocalCredentialId("AQ");
+    cached.profile.prfSalt[0] = 0;
+    cached.prfOutput[0] = 0;
+
+    expect(first.loadCachedPRFResult()).toMatchObject({ credentialId: "AQ" });
+    expect(first.loadCachedPRFResult()?.prfOutput[0]).toBe(7);
+    expect(first.loadLocalCredentialId()).toBe("AQ");
+    expect(second.loadCachedPRFResult()).toBeNull();
+    expect(second.loadLocalCredentialId()).toBeNull();
+    first.clear();
+    second.clear();
   });
 
   it("catches every host storage operation independently", async () => {
@@ -419,7 +447,7 @@ describe("ceremony lifecycle", () => {
     expect(ceremonySignal?.aborted).toBe(true);
     resolveLate(credential({ prf: new Uint8Array(32).fill(9) }));
     await Promise.resolve();
-    expect(storage.loadCachedPRFResult(profile)).toBeNull();
+    expect(storage.loadCachedPRFResult()).toBeNull();
     await expect(
       manager.createAndWrapKey({ user, key: new Uint8Array(32) }),
     ).resolves.toBeDefined();

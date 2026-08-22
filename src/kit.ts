@@ -174,10 +174,7 @@ export function createPasskeyKeyManager(
     }
     if (result.isPlatformAuthenticator) {
       try {
-        config.storage?.saveLocalCredentialId(
-          copyAndValidateProfile(profile),
-          result.credentialId,
-        );
+        config.storage?.saveLocalCredentialId(result.credentialId);
       } catch {
         // Storage is best-effort and cannot invalidate a successful ceremony.
       }
@@ -187,8 +184,7 @@ export function createPasskeyKeyManager(
   function loadCachedResult(): CachedPRFResult | null {
     let result: CachedPRFResult | null;
     try {
-      result =
-        config.storage?.loadCachedPRFResult(copyAndValidateProfile(profile)) ?? null;
+      result = config.storage?.loadCachedPRFResult() ?? null;
     } catch {
       return null;
     }
@@ -216,9 +212,7 @@ export function createPasskeyKeyManager(
 
   function loadPreferredCredentialId(): string | null {
     try {
-      return (
-        config.storage?.loadLocalCredentialId(copyAndValidateProfile(profile)) ?? null
-      );
+      return config.storage?.loadLocalCredentialId() ?? null;
     } catch {
       return null;
     }
@@ -321,7 +315,7 @@ export function createPasskeyKeyManager(
 
     clearLocalState() {
       try {
-        config.storage?.clear(copyAndValidateProfile(profile));
+        config.storage?.clear();
       } catch {
         // Storage is best-effort.
       }
