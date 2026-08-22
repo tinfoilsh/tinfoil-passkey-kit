@@ -1,7 +1,6 @@
 name: Release
 
 on:
-  workflow_dispatch:
   push:
     tags:
       - "v*"
@@ -47,7 +46,6 @@ jobs:
             throw new Error(`release tag ${tag} does not match package version ${packageVersion}`);
           }
           NODE
-          git fetch origin main:refs/remotes/origin/main
           git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
 
       - name: Install dependencies

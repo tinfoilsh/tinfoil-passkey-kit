@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import fixtures from "../../Fixtures/interop.json" with { type: "json" };
 import {
   base64ToBytes,
   base64UrlToBytes,
@@ -56,39 +57,48 @@ describe("codec", () => {
 });
 
 describe("wrapped key JSON codec", () => {
-  const wrappedKey: WrappedKey = {
-    profile: {
-      version: 1,
-      relyingPartyId: "example.com",
-      prfSalt: new Uint8Array([0, 255]),
-      hkdfInfo: new Uint8Array([1, 2, 3]),
-    },
-    credentialId: "AQID",
-    kekIvHex: "00".repeat(12),
-    wrappedKeyHex: "11".repeat(48),
-  };
-  const canonical =
-    '{"version":1,"profile":{"version":1,"relyingPartyId":"example.com","prfSalt":"AP8","hkdfInfo":"AQID"},"credentialId":"AQID","kekIvHex":"000000000000000000000000","wrappedKeyHex":"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"}';
+  type FixtureVector = (typeof fixtures.vectors)[keyof typeof fixtures.vectors];
 
-  it("emits exact cross-language canonical JSON", () => {
-    expect(encodeWrappedKeyRecord(wrappedKey)).toBe(canonical);
-    expect(decodeWrappedKeyRecord(canonical)).toEqual(wrappedKey);
+  function wrappedKey(vector: FixtureVector): WrappedKey {
+    return {
+      profile: {
+        version: vector.wrappedKey.profile.version as 1,
+        relyingPartyId: vector.wrappedKey.profile.relyingPartyId,
+        prfSalt: hexToBytes(vector.wrappedKey.profile.prfSaltHex),
+        hkdfInfo: hexToBytes(vector.wrappedKey.profile.hkdfInfoHex),
+      },
+      credentialId: vector.wrappedKey.credentialId,
+      kekIvHex: vector.wrappedKey.kekIvHex,
+      wrappedKeyHex: vector.wrappedKey.wrappedKeyHex,
+    };
+  }
+
+  const javascriptVector = fixtures.vectors.javascriptWrapped;
+  const canonical = javascriptVector.canonicalRecord;
+
+  it("emits every exact cross-language canonical record", () => {
+    for (const vector of Object.values(fixtures.vectors)) {
+      const wrapped = wrappedKey(vector);
+      expect(encodeWrappedKeyRecord(wrapped)).toBe(vector.canonicalRecord);
+      expect(decodeWrappedKeyRecord(vector.canonicalRecord)).toEqual(wrapped);
+    }
   });
 
   it("accepts insignificant whitespace and any key order", () => {
+    const wrapped = wrappedKey(javascriptVector);
     const reordered = JSON.stringify({
-      wrappedKeyHex: wrappedKey.wrappedKeyHex,
-      credentialId: wrappedKey.credentialId,
+      wrappedKeyHex: wrapped.wrappedKeyHex,
+      credentialId: wrapped.credentialId,
       profile: {
-        hkdfInfo: "AQID",
-        relyingPartyId: "example.com",
+        hkdfInfo: bytesToBase64Url(wrapped.profile.hkdfInfo),
+        relyingPartyId: wrapped.profile.relyingPartyId,
         version: 1,
-        prfSalt: "AP8",
+        prfSalt: bytesToBase64Url(wrapped.profile.prfSalt),
       },
       version: 1,
-      kekIvHex: wrappedKey.kekIvHex,
+      kekIvHex: wrapped.kekIvHex,
     }, null, 2);
-    expect(decodeWrappedKeyRecord(reordered)).toEqual(wrappedKey);
+    expect(decodeWrappedKeyRecord(reordered)).toEqual(wrapped);
   });
 
   it.each([
@@ -97,19 +107,20 @@ describe("wrapped key JSON codec", () => {
     canonical.replace('"version":1', '"version":2'),
     canonical.replace('"profile":{"version":1', '"profile":{"version":2'),
     canonical.replace('"profile":{', '"extra":true,"profile":{'),
-    canonical.replace('"prfSalt":"AP8"', '"prfSalt":"AP8="'),
-    canonical.replace('"hkdfInfo":"AQID"', '"hkdfInfo":"***"'),
+    canonical.replace('"profile":{"version":1,', '"profile":{"version":1,"extra":true,'),
+    canonical.replace('"prfSalt":"', '"prfSalt":"='),
+    canonical.replace('"hkdfInfo":"', '"hkdfInfo":"***'),
     canonical.replace('"credentialId":"AQID"', '"credentialId":"AQID="'),
     canonical.replace('"credentialId":"AQID"', '"credentialId":"AB"'),
     canonical.replace('"credentialId":"AQID"', '"credentialId":""'),
-    canonical.replace('"kekIvHex":"00', '"kekIvHex":"AA'),
+    canonical.replace('"kekIvHex":"01', '"kekIvHex":"AA'),
     canonical.replace(
-      '"kekIvHex":"000000000000000000000000"',
-      '"kekIvHex":["000000000000000000000000"]',
+      `"kekIvHex":"${javascriptVector.wrappedKey.kekIvHex}"`,
+      `"kekIvHex":["${javascriptVector.wrappedKey.kekIvHex}"]`,
     ),
     canonical.replace(
-      `"wrappedKeyHex":"${wrappedKey.wrappedKeyHex}"`,
-      `"wrappedKeyHex":["${wrappedKey.wrappedKeyHex}"]`,
+      `"wrappedKeyHex":"${javascriptVector.wrappedKey.wrappedKeyHex}"`,
+      `"wrappedKeyHex":["${javascriptVector.wrappedKey.wrappedKeyHex}"]`,
     ),
   ])("rejects malformed records", (value) => {
     expect(() => decodeWrappedKeyRecord(value)).toThrowError(
@@ -131,7 +142,11 @@ describe("wrapped key JSON codec", () => {
     const second = decodeWrappedKeyRecord(canonical);
     first.profile.prfSalt[0] = 99;
     first.profile.hkdfInfo[0] = 99;
-    expect(second.profile.prfSalt).toEqual(new Uint8Array([0, 255]));
-    expect(second.profile.hkdfInfo).toEqual(new Uint8Array([1, 2, 3]));
+    expect(second.profile.prfSalt).toEqual(
+      hexToBytes(javascriptVector.wrappedKey.profile.prfSaltHex),
+    );
+    expect(second.profile.hkdfInfo).toEqual(
+      hexToBytes(javascriptVector.wrappedKey.profile.hkdfInfoHex),
+    );
   });
 });
