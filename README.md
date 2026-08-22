@@ -1,15 +1,14 @@
 # Tinfoil Passkey Kit
 
-Cross-platform SDKs for protecting content-encryption keys with passkeys and
+Cross-platform SDKs for protecting key material with passkeys and
 the WebAuthn PRF extension. The JavaScript and Swift implementations share the
-same protocol constants and wire formats, so either client can recover a CEK
-wrapped by the other.
+same profile-driven wire format, so either client can recover a CEK wrapped by
+the other.
 
 - Passkey creation and authentication with PRF
 - HKDF-SHA-256 key-encryption-key derivation
 - AES-256-GCM CEK wrapping and unwrapping
-- Stable CEK key-ID derivation
-- Device-local PRF and credential persistence
+- Optional device-local PRF and credential persistence
 
 ## JavaScript
 
@@ -20,42 +19,53 @@ npm install @tinfoilsh/passkey-kit
 ```
 
 ```ts
-import { createPasskeyKit, generateCek } from "@tinfoilsh/passkey-kit";
+import {
+  createPasskeyKeyManager,
+  decodeWrappedKeyRecord,
+  encodeWrappedKeyRecord,
+} from "@tinfoilsh/passkey-kit";
 
-const kit = createPasskeyKit({
-  rpId: "example.com",
-  rpName: "Example App",
+const profile = {
+  version: 1,
+  relyingPartyId: "example.com",
+  prfSalt: new TextEncoder().encode("example-key-wrapping"),
+  hkdfInfo: new TextEncoder().encode("example-wrapping-key-v1"),
+};
+const manager = createPasskeyKeyManager({
+  profile,
+  relyingPartyName: "Example App",
 });
 
-const cek = generateCek();
-const enrolled = await kit.enroll({
-  user: { id: userId, name: email, displayName },
-  cek,
+const created = await manager.createAndWrapKey({
+  user: { id: opaqueUserHandle, name: email, displayName },
+  key,
 });
+await api.saveWrappedKey(created.wrappedKey);
+const canonicalRecord = encodeWrappedKeyRecord(created.wrappedKey);
+const wrappedKey = decodeWrappedKeyRecord(canonicalRecord);
 
-if (enrolled) {
-  await api.saveBundle(enrolled.wrappedCek);
-}
-
-const unlocked = await kit.unlock(bundlesFromServer);
-if (unlocked) {
-  useCek(unlocked.cek);
-}
+const recovered = await manager.recoverKey({
+  wrappedKeys: [wrappedKey],
+});
+useKey(recovered.key);
 ```
 
-High-level ceremony methods return `null` when the user cancels. They throw
-`PrfNotSupportedError` when the authenticator lacks PRF support and
-`PasskeyTimeoutError` when the provider hangs. Classify these errors with
-`instanceof`, not message strings.
+Ceremony failures throw `PasskeyKeyError`. Branch on its stable `category`, not
+its message.
 
-The kit also provides cached unlock and rewrap flows. Lower-level exports
-include `detectPrfSupport`, `deriveKeyEncryptionKey`, `generateCek`,
-`isValidCek`, `wrapCek`, `unwrapCek`, and `deriveKeyId`.
+Persistence is disabled by default. Cached recovery and rewrap require an
+explicit synchronous `PasskeyKeyStorage`. Cached PRF output is raw secret key
+material and requires host-appropriate protection.
 
-Persistence is disabled by default. Hosts may explicitly opt in to the browser
-local-storage adapter or provide a custom adapter. The browser adapter is
-insecure because same-origin scripts can read cached PRF output, which is raw
-secret key material.
+The memory adapter is suitable for tests. The explicitly named
+`createInsecureBrowserLocalStoragePasskeyKeyStorage(namespace)` adapter stores
+raw PRF output unencrypted, isolates records by its required namespace, and is
+insecure because same-origin scripts can read the cached secret material.
+
+`evaluateCredential` exposes raw PRF output for advanced migrations. Treat
+`prfResult.output` as secret key material and prefer `recoverKey` for normal
+recovery. `wrapKeyWithPRFResult` and `unwrapKeyWithPRFResult` perform explicit
+crypto-only operations without starting a ceremony or accessing storage.
 
 ## Swift
 
@@ -99,16 +109,17 @@ entitlement for its relying-party domain.
 
 ## Protocol
 
-Both implementations default to the Tinfoil v1 PRF salt and HKDF info. These
-values must remain identical across clients that wrap the same CEK. Override
-both values together to establish a separate protocol domain.
+Both implementations use the PRF salt and HKDF info supplied by the profile.
+These values must remain identical across clients that wrap the same key.
 
-The server-persisted wrapped bundle contains only:
+The existing Tinfoil server adapter persists only:
 
 - The unpadded base64url credential ID
 - The 12-byte AES-GCM IV as lowercase hexadecimal
 - The wrapped CEK ciphertext and 16-byte authentication tag as lowercase
   hexadecimal
+
+The adapter reconstructs the known profile when reading these legacy records.
 
 User identity, server persistence, associated-domain configuration, and
 recovery UI remain the host application's responsibility.

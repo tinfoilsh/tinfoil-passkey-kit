@@ -1,172 +1,131 @@
-import { describe, expect, it } from "vitest";
-import { bytesToHex } from "../../src/codec.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  CEK_BYTES,
-  deriveKeyEncryptionKey,
-  deriveKeyId,
-  generateCek,
-  isValidCek,
-  unwrapCek,
-  wrapCek,
+  copyAndValidateProfile,
+  deriveWrappingKey,
+  unwrapKey,
+  validateCredentialId,
+  validateKey,
+  wrapKey,
 } from "../../src/crypto.js";
-import { PasskeyKitError } from "../../src/errors.js";
-import {
-  TINFOIL_HKDF_INFO_V1,
-  TINFOIL_KEY_ID_INFO_V1,
-} from "../../src/protocol.js";
+import type { PasskeyKeyProfile } from "../../src/types.js";
 
-const HKDF_INFO = "test-kek-v1";
+const encoder = new TextEncoder();
+const profile: PasskeyKeyProfile = {
+  version: 1,
+  relyingPartyId: "example.com",
+  prfSalt: encoder.encode("tinfoil-chat-key-encryption"),
+  hkdfInfo: encoder.encode("tinfoil-chat-kek-v1"),
+};
 
-function randomPrfOutput(): ArrayBuffer {
-  return crypto.getRandomValues(new Uint8Array(32)).buffer as ArrayBuffer;
-}
-
-describe("generateCek / isValidCek", () => {
-  it("generates a valid CEK that wrap/unwrap accepts", async () => {
-    const cek = generateCek();
-    expect(isValidCek(cek)).toBe(true);
-    const kek = await deriveKeyEncryptionKey(randomPrfOutput(), HKDF_INFO);
-    const wrapped = await wrapCek({ credentialId: "c", kek, cek });
-    expect(await unwrapCek(kek, wrapped)).toEqual(cek);
-  });
-
-  it("generates a distinct CEK per call", () => {
-    expect(generateCek()).not.toEqual(generateCek());
-  });
-
-  it("rejects wrong lengths and non-byte inputs", () => {
-    expect(isValidCek(new Uint8Array(CEK_BYTES - 1))).toBe(false);
-    expect(isValidCek(new Uint8Array(CEK_BYTES + 1))).toBe(false);
-    expect(isValidCek(Array.from(generateCek()))).toBe(false);
-    expect(isValidCek(generateCek().buffer)).toBe(false);
-    expect(isValidCek(null)).toBe(false);
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
-describe("deriveKeyEncryptionKey", () => {
+describe("key wrapping", () => {
+  it("preserves the existing adapter wire bytes", async () => {
+    const prfOutput = new Uint8Array(32).map((_, index) => index);
+    const key = new Uint8Array(32).map((_, index) => 255 - index);
+    const iv = new Uint8Array(12).map((_, index) => index + 1);
+    vi.spyOn(crypto, "getRandomValues").mockImplementation((value) => {
+      new Uint8Array(value.buffer, value.byteOffset, value.byteLength).set(iv);
+      return value;
+    });
+
+    const wrapped = await wrapKey(profile, "AQID", prfOutput, key);
+    const adapterFixture = {
+      credentialId: "AQID",
+      kekIvHex: "0102030405060708090a0b0c",
+      wrappedKeyHex:
+        "53c8f700925c9f94a7cf679d8a892c82f7c443769103a322e477a38d9118f0a014a659136ee1b9f6ed4921877f17aca7",
+    };
+    expect(wrapped).toEqual({
+      profile,
+      ...adapterFixture,
+    });
+    expect(wrapped.profile).not.toBe(profile);
+    expect(wrapped.profile.prfSalt).not.toBe(profile.prfSalt);
+    expect(wrapped.profile.hkdfInfo).not.toBe(profile.hkdfInfo);
+    expect(
+      await unwrapKey(profile, prfOutput, {
+        profile,
+        ...adapterFixture,
+      }),
+    ).toEqual(key);
+  });
+
   it("derives a non-extractable AES-256-GCM key", async () => {
-    const kek = await deriveKeyEncryptionKey(randomPrfOutput(), HKDF_INFO);
-    expect(kek.algorithm).toMatchObject({ name: "AES-GCM", length: 256 });
-    expect(kek.extractable).toBe(false);
-    expect(kek.usages).toContain("encrypt");
-    expect(kek.usages).toContain("decrypt");
+    const key = await deriveWrappingKey(new Uint8Array(32), profile);
+    expect(key.algorithm).toMatchObject({ name: "AES-GCM", length: 256 });
+    expect(key.extractable).toBe(false);
   });
 
-  it("is deterministic for the same PRF output and info", async () => {
-    const prf = crypto.getRandomValues(new Uint8Array(32));
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const kek1 = await deriveKeyEncryptionKey(prf.slice(), HKDF_INFO);
-    const kek2 = await deriveKeyEncryptionKey(prf.slice(), HKDF_INFO);
-    const wrapped = await wrapCek({ credentialId: "c", kek: kek1, cek });
-    expect(await unwrapCek(kek2, wrapped)).toEqual(cek);
-  });
-
-  it("domain-separates by hkdf info", async () => {
-    const prf = crypto.getRandomValues(new Uint8Array(32));
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const kek1 = await deriveKeyEncryptionKey(prf.slice(), HKDF_INFO);
-    const kek2 = await deriveKeyEncryptionKey(prf.slice(), "other-info");
-    const wrapped = await wrapCek({ credentialId: "c", kek: kek1, cek });
-    await expect(unwrapCek(kek2, wrapped)).rejects.toThrow();
-  });
-
-  it("defaults hkdfInfo to the exported Tinfoil v1 constant", async () => {
-    const prf = crypto.getRandomValues(new Uint8Array(32));
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const defaulted = await deriveKeyEncryptionKey(prf.slice());
-    const explicit = await deriveKeyEncryptionKey(
-      prf.slice(),
-      TINFOIL_HKDF_INFO_V1,
+  it("accepts exactly 32 key bytes", () => {
+    expect(() => validateKey(new Uint8Array(32))).not.toThrow();
+    expect(() => validateKey(new Uint8Array(31))).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
     );
-    const wrapped = await wrapCek({ credentialId: "c", kek: defaulted, cek });
-    expect(await unwrapCek(explicit, wrapped)).toEqual(cek);
-  });
-});
-
-describe("wrapCek / unwrapCek", () => {
-  it("round-trips a CEK", async () => {
-    const kek = await deriveKeyEncryptionKey(randomPrfOutput(), HKDF_INFO);
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const wrapped = await wrapCek({ credentialId: "cred-1", kek, cek });
-    expect(wrapped.credentialId).toBe("cred-1");
-    expect(wrapped.kekIvHex).toMatch(/^[0-9a-f]{24}$/);
-    expect(await unwrapCek(kek, wrapped)).toEqual(cek);
+    expect(() => validateKey(new Uint8Array(33))).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
   });
 
-  it("uses a fresh IV per wrap", async () => {
-    const kek = await deriveKeyEncryptionKey(randomPrfOutput(), HKDF_INFO);
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const a = await wrapCek({ credentialId: "c", kek, cek });
-    const b = await wrapCek({ credentialId: "c", kek, cek });
-    expect(a.kekIvHex).not.toBe(b.kekIvHex);
-    expect(a.wrappedKeyHex).not.toBe(b.wrappedKeyHex);
+  it.each(["", "A", "AB", "AQ==", "A+"])(
+    "rejects malformed or noncanonical credential IDs",
+    (credentialId) => {
+      expect(() => validateCredentialId(credentialId)).toThrowError(
+        expect.objectContaining({ category: "invalid_input" }),
+      );
+    },
+  );
+
+  it("accepts canonical unpadded credential IDs", () => {
+    expect(() => validateCredentialId("AQ")).not.toThrow();
+    expect(() => validateCredentialId("AQID")).not.toThrow();
   });
 
-  it("rejects a CEK of the wrong length", async () => {
-    const kek = await deriveKeyEncryptionKey(randomPrfOutput(), HKDF_INFO);
+  it("strictly validates and defensively copies profiles", () => {
+    const input = {
+      ...profile,
+      prfSalt: profile.prfSalt.slice(),
+      hkdfInfo: profile.hkdfInfo.slice(),
+    };
+    const copied = copyAndValidateProfile(input);
+    input.prfSalt[0] = 0;
+    input.hkdfInfo[0] = 0;
+    expect(copied.prfSalt).toEqual(profile.prfSalt);
+    expect(copied.hkdfInfo).toEqual(profile.hkdfInfo);
+    expect(() => copyAndValidateProfile({ ...profile, extra: true } as never)).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
+    expect(() => copyAndValidateProfile({ ...profile, version: 0 } as never)).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
+    expect(() => copyAndValidateProfile({ ...profile, version: 2 } as never)).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
+  });
+
+  it("rejects profile mismatches, malformed fields, and tampering", async () => {
+    const prfOutput = new Uint8Array(32);
+    const wrapped = await wrapKey(profile, "AQ", prfOutput, new Uint8Array(32));
     await expect(
-      wrapCek({ credentialId: "c", kek, cek: new Uint8Array(16) }),
-    ).rejects.toBeInstanceOf(PasskeyKitError);
-  });
-
-  it("rejects tampered ciphertext", async () => {
-    const kek = await deriveKeyEncryptionKey(randomPrfOutput(), HKDF_INFO);
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const wrapped = await wrapCek({ credentialId: "c", kek, cek });
-    const firstByte = parseInt(wrapped.wrappedKeyHex.slice(0, 2), 16);
-    const flipped =
-      ((firstByte ^ 0xff).toString(16).padStart(2, "0") as string) +
-      wrapped.wrappedKeyHex.slice(2);
+      unwrapKey({ ...profile, hkdfInfo: encoder.encode("other") }, prfOutput, wrapped),
+    ).rejects.toMatchObject({ category: "invalid_input" });
     await expect(
-      unwrapCek(kek, { ...wrapped, wrappedKeyHex: flipped }),
-    ).rejects.toThrow();
-  });
-
-  it("rejects malformed inputs", async () => {
-    const kek = await deriveKeyEncryptionKey(randomPrfOutput(), HKDF_INFO);
+      unwrapKey(profile, prfOutput, { ...wrapped, kekIvHex: "bad" }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
     await expect(
-      unwrapCek(kek, { kekIvHex: "", wrappedKeyHex: "aa" }),
-    ).rejects.toBeInstanceOf(PasskeyKitError);
+      unwrapKey(profile, prfOutput, { ...wrapped, credentialId: "AB" }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+    const first = wrapped.wrappedKeyHex[0] === "0" ? "1" : "0";
     await expect(
-      unwrapCek(kek, { kekIvHex: "aabb", wrappedKeyHex: "aa" }),
-    ).rejects.toBeInstanceOf(PasskeyKitError);
-  });
-});
-
-describe("deriveKeyId", () => {
-  it("defaults to the shared Tinfoil key-ID protocol", async () => {
-    const cek = new Uint8Array(CEK_BYTES).map((_, index) => index);
-    const defaulted = await deriveKeyId(cek);
-    const explicit = await deriveKeyId(cek, { info: TINFOIL_KEY_ID_INFO_V1 });
-
-    expect(defaulted).toEqual(explicit);
-    expect(bytesToHex(defaulted)).toBe("960e28ca37b723e7abc19995dbef143f");
-  });
-
-  it("is deterministic and hex-encodable", async () => {
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const id1 = await deriveKeyId(cek, { info: "key-id-v1" });
-    const id2 = await deriveKeyId(cek, { info: "key-id-v1" });
-    expect(id1).toEqual(id2);
-    expect(bytesToHex(id1)).toMatch(/^[0-9a-f]{32}$/);
-  });
-
-  it("domain-separates by info and differs per CEK", async () => {
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const other = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const a = await deriveKeyId(cek, { info: "key-id-v1" });
-    const b = await deriveKeyId(cek, { info: "key-id-v2" });
-    const c = await deriveKeyId(other, { info: "key-id-v1" });
-    expect(a).not.toEqual(b);
-    expect(a).not.toEqual(c);
-  });
-
-  it("supports custom output lengths and rejects bad CEKs", async () => {
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const id = await deriveKeyId(cek, { info: "key-id-v1", lengthBytes: 32 });
-    expect(id.length).toBe(32);
-    await expect(
-      deriveKeyId(new Uint8Array(8), { info: "key-id-v1" }),
-    ).rejects.toBeInstanceOf(PasskeyKitError);
+      unwrapKey(profile, prfOutput, {
+        ...wrapped,
+        wrappedKeyHex: `${first}${wrapped.wrappedKeyHex.slice(1)}`,
+      }),
+    ).rejects.toMatchObject({ category: "operation_failed" });
+    await expect(deriveWrappingKey(new Uint8Array(31), profile)).rejects.toMatchObject({
+      category: "invalid_input",
+    });
   });
 });

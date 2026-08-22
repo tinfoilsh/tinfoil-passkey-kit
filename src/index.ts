@@ -1,47 +1,32 @@
+export { PasskeyKeyError } from "./errors.js";
+export type { PasskeyKeyErrorCategory } from "./errors.js";
+export { createPasskeyKeyManager } from "./kit.js";
 export {
-  base64ToBytes,
-  base64UrlToBytes,
-  bufferSourceToArrayBuffer,
-  bytesToBase64,
-  bytesToBase64Url,
-  bytesToHex,
-  hexToBytes,
-} from "./codec.js";
+  decodeWrappedKeyRecord,
+  encodeWrappedKeyRecord,
+} from "./wrapped-key-record-codec.js";
 export {
-  CEK_BYTES,
-  deriveKeyEncryptionKey,
-  deriveKeyId,
-  generateCek,
-  isValidCek,
-  unwrapCek,
-  wrapCek,
-} from "./crypto.js";
-export {
-  PasskeyKitError,
-  PasskeyTimeoutError,
-  PrfNotSupportedError,
-} from "./errors.js";
-export { createPasskeyKit } from "./kit.js";
-export type { PasskeyKit } from "./kit.js";
-export {
-  TINFOIL_HKDF_INFO_V1,
-  TINFOIL_KEY_ID_INFO_V1,
-  TINFOIL_PRF_SALT_INPUT_V1,
-} from "./protocol.js";
-export {
-  browserLocalStorageAdapter,
-  createMemoryStorageAdapter,
+  createInsecureBrowserLocalStoragePasskeyKeyStorage,
+  createMemoryPasskeyKeyStorage,
 } from "./storage.js";
-export type { StorageAdapter } from "./storage.js";
-export { detectPrfSupport } from "./support.js";
+export type { CachedPRFResult, PasskeyKeyStorage } from "./storage.js";
 export type {
-  EnrollResult,
-  PasskeyKitConfig,
-  PasskeyKitErrorMessages,
-  PasskeyKitLogger,
-  PasskeyKitStorageKeys,
+  CreateAndWrapKeyInput,
+  CreatedWrappedKey,
+  EvaluatedCredential,
+  EvaluateCredentialInput,
+  PasskeyCapability,
+  PasskeyInteraction,
+  PasskeyKeyManager,
+  PasskeyKeyManagerConfig,
+  PasskeyKeyProfile,
   PasskeyUser,
-  PrfPasskeyResult,
-  UnlockResult,
-  WrappedCek,
+  PRFResult,
+  RecoveredKey,
+  RecoverKeyInput,
+  RewrapKeyInput,
+  UnwrapKeyWithPRFResultInput,
+  WrapKeyWithPRFResultInput,
+  WrappedKey,
+  WrappedKeyRecord,
 } from "./types.js";

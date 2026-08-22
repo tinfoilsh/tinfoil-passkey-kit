@@ -1,69 +1,135 @@
-/**
- * Pluggable local persistence for the SDK's device-side state: the cached
- * PRF output and the credential id this device owns. Adapters are
- * synchronous by design (mirroring the Web Storage API) so callers can
- * read cached state without awaiting.
- *
- * SECURITY: the PRF output cached through an adapter is raw key material —
- * anyone who can read it can re-derive the KEK and unwrap the CEK. The
- * default `localStorage` adapter stores it in plaintext, which is only as
- * strong as the origin's script-injection defenses (an XSS attacker could
- * equally just run the ceremony or exfiltrate decrypted data). Hosts with
- * stricter requirements should supply their own adapter with at-rest
- * protection, or pass `storage: null` to disable caching and re-prompt
- * biometrics instead.
- */
+import { base64ToBytes, bytesToBase64 } from "./codec.js";
+import type { PasskeyKeyProfile } from "./types.js";
 
-export interface StorageAdapter {
-  getItem(key: string): string | null
-  setItem(key: string, value: string): void
-  removeItem(key: string): void
+export interface CachedPRFResult {
+  profile: PasskeyKeyProfile;
+  credentialId: string;
+  prfOutput: Uint8Array;
 }
 
-/**
- * Default adapter backed by `window.localStorage`. Every operation is
- * best-effort: quota errors, privacy-mode failures, blocked-storage
- * contexts (e.g. sandboxed frames, where even touching `localStorage`
- * throws), and SSR (no window) all degrade to no-ops so storage problems
- * never interrupt a passkey ceremony.
- */
-export const browserLocalStorageAdapter: StorageAdapter = {
-  getItem(key: string): string | null {
-    try {
-      if (typeof localStorage === 'undefined') return null
-      return localStorage.getItem(key)
-    } catch {
-      return null
-    }
-  },
-  setItem(key: string, value: string): void {
-    try {
-      if (typeof localStorage === 'undefined') return
-      localStorage.setItem(key, value)
-    } catch {
-      // best-effort
-    }
-  },
-  removeItem(key: string): void {
-    try {
-      if (typeof localStorage === 'undefined') return
-      localStorage.removeItem(key)
-    } catch {
-      // best-effort
-    }
-  },
+export interface PasskeyKeyStorage {
+  loadCachedPRFResult(): CachedPRFResult | null;
+  saveCachedPRFResult(result: CachedPRFResult): void;
+  loadLocalCredentialId(): string | null;
+  saveLocalCredentialId(credentialId: string): void;
+  clear(): void;
 }
 
-/** In-memory adapter for tests and non-browser environments. */
-export function createMemoryStorageAdapter(): StorageAdapter {
-  const store = new Map<string, string>()
+function copyProfile(profile: PasskeyKeyProfile): PasskeyKeyProfile {
   return {
-    getItem: (key) => store.get(key) ?? null,
-    setItem: (key, value) => {
-      store.set(key, value)
+    ...profile,
+    prfSalt: profile.prfSalt.slice(),
+    hkdfInfo: profile.hkdfInfo.slice(),
+  };
+}
+
+function copyCachedResult(result: CachedPRFResult): CachedPRFResult {
+  return {
+    profile: copyProfile(result.profile),
+    credentialId: result.credentialId,
+    prfOutput: result.prfOutput.slice(),
+  };
+}
+
+export function createMemoryPasskeyKeyStorage(): PasskeyKeyStorage {
+  let cached: CachedPRFResult | null = null;
+  let localCredentialId: string | null = null;
+  return {
+    loadCachedPRFResult() {
+      return cached ? copyCachedResult(cached) : null;
     },
-    removeItem: (key) => {
-      store.delete(key)
+    saveCachedPRFResult(result) {
+      cached = copyCachedResult(result);
     },
-  }
+    loadLocalCredentialId() {
+      return localCredentialId;
+    },
+    saveLocalCredentialId(credentialId) {
+      localCredentialId = credentialId;
+    },
+    clear() {
+      cached = null;
+      localCredentialId = null;
+    },
+  };
+}
+
+interface SerializedCachedPRFResult {
+  profile: Omit<PasskeyKeyProfile, "prfSalt" | "hkdfInfo"> & {
+    prfSaltBase64: string;
+    hkdfInfoBase64: string;
+  };
+  credentialId: string;
+  prfOutputBase64: string;
+}
+
+/** Stores raw PRF output unencrypted in localStorage under an explicit namespace. */
+export function createInsecureBrowserLocalStoragePasskeyKeyStorage(
+  namespace: string,
+): PasskeyKeyStorage {
+  const prefix = `passkey-key/${encodeURIComponent(namespace)}`;
+  const cachedKey = `${prefix}/cached-prf`;
+  const localCredentialKey = `${prefix}/local-credential`;
+  return {
+    loadCachedPRFResult() {
+      try {
+        if (typeof localStorage === "undefined") return null;
+        const value = localStorage.getItem(cachedKey);
+        if (!value) return null;
+        const stored = JSON.parse(value) as SerializedCachedPRFResult;
+        return {
+          profile: {
+            version: stored.profile.version,
+            relyingPartyId: stored.profile.relyingPartyId,
+            prfSalt: base64ToBytes(stored.profile.prfSaltBase64),
+            hkdfInfo: base64ToBytes(stored.profile.hkdfInfoBase64),
+          },
+          credentialId: stored.credentialId,
+          prfOutput: base64ToBytes(stored.prfOutputBase64),
+        };
+      } catch {
+        return null;
+      }
+    },
+    saveCachedPRFResult(result) {
+      try {
+        if (typeof localStorage === "undefined") return;
+        const serialized: SerializedCachedPRFResult = {
+          profile: {
+            version: result.profile.version,
+            relyingPartyId: result.profile.relyingPartyId,
+            prfSaltBase64: bytesToBase64(result.profile.prfSalt),
+            hkdfInfoBase64: bytesToBase64(result.profile.hkdfInfo),
+          },
+          credentialId: result.credentialId,
+          prfOutputBase64: bytesToBase64(result.prfOutput),
+        };
+        localStorage.setItem(cachedKey, JSON.stringify(serialized));
+      } catch {}
+    },
+    loadLocalCredentialId() {
+      try {
+        if (typeof localStorage === "undefined") return null;
+        return localStorage.getItem(localCredentialKey);
+      } catch {
+        return null;
+      }
+    },
+    saveLocalCredentialId(credentialId) {
+      try {
+        if (typeof localStorage === "undefined") return;
+        localStorage.setItem(localCredentialKey, credentialId);
+      } catch {}
+    },
+    clear() {
+      try {
+        if (typeof localStorage === "undefined") return;
+        localStorage.removeItem(cachedKey);
+      } catch {}
+      try {
+        if (typeof localStorage === "undefined") return;
+        localStorage.removeItem(localCredentialKey);
+      } catch {}
+    },
+  };
 }

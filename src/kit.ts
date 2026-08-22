@@ -1,333 +1,475 @@
-/**
- * The main SDK entry point. `createPasskeyKit(config)` binds relying-party
- * configuration, protocol constants, and local persistence into a single
- * object exposing both high-level flows (enroll / unlock / rewrap) and the
- * lower-level ceremony + crypto building blocks.
- */
-
-import { base64ToBytes, bytesToBase64 } from "./codec.js";
 import {
-  deriveKeyEncryptionKey as deriveKekFromPrf,
-  unwrapCek,
-  wrapCek,
+  copyAndValidateProfile,
+  profilesEqual,
+  unwrapKey,
+  validateCredentialId,
+  validateKey,
+  validateWrappedKey,
+  wrapKey,
 } from "./crypto.js";
-import { TINFOIL_HKDF_INFO_V1, TINFOIL_PRF_SALT_INPUT_V1 } from "./protocol.js";
-import { browserLocalStorageAdapter, type StorageAdapter } from "./storage.js";
-import { detectPrfSupport } from "./support.js";
+import { invalidInput, PasskeyKeyError } from "./errors.js";
+import { capability as detectCapability } from "./support.js";
+import type { CachedPRFResult } from "./storage.js";
 import type {
-  EnrollResult,
-  PasskeyKitConfig,
-  PasskeyKitStorageKeys,
+  CreateAndWrapKeyInput,
+  EvaluateCredentialInput,
+  PasskeyKeyManager,
+  PasskeyKeyManagerConfig,
   PasskeyUser,
-  PrfPasskeyResult,
-  UnlockResult,
-  WrappedCek,
+  RecoverKeyInput,
+  UnwrapKeyWithPRFResultInput,
+  WrapKeyWithPRFResultInput,
+  WrappedKey,
 } from "./types.js";
 import {
-  authenticatePrfPasskey,
-  createPrfPasskey,
+  createPrfCredential,
+  evaluatePrfCredential,
   type CeremonyContext,
+  type InternalPrfResult,
 } from "./webauthn.js";
 
-const DEFAULT_STORAGE_KEYS: PasskeyKitStorageKeys = {
-  prfResult: "tinfoil-secret-passkey-prf-output",
-  localCredentialId: "tinfoil-local-passkey-credential-id",
-};
+const DEFAULT_TIMEOUT_MS = 60_000;
+const MIN_TIMEOUT_MS = 1;
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
-const DEFAULT_WEBAUTHN_TIMEOUT_MS = 30_000;
-
-// Internal hard timeout to guard against providers (e.g. some
-// password-manager browser extensions) that never resolve the
-// credentials.create/get promise. Kept tight so users aren't left staring
-// at an indefinite spinner; the WebAuthn flow itself should complete well
-// within this window once the provider actually prompts.
-const DEFAULT_STUCK_TIMEOUT_MS = 60_000;
-
-interface PrfCacheEntry {
-  credentialId: string;
-  prfOutput: string; // base64-encoded
+interface ActiveCeremony {
+  token: symbol;
+  operation: string;
+  cancel(error: PasskeyKeyError): void;
 }
 
-export interface PasskeyKit {
-  /** Optimistic device/browser PRF support check (cached per kit). */
-  isPrfSupported(): Promise<boolean>;
-  resetPrfSupportCache(): void;
-
-  /**
-   * Create a new PRF-capable passkey. Returns null when the user cancels;
-   * throws PrfNotSupportedError / PasskeyTimeoutError otherwise on failure.
-   */
-  createPasskey(user: PasskeyUser): Promise<PrfPasskeyResult | null>;
-  /**
-   * Prompt for an assertion against any of the given credential ids and
-   * return the matched credential's PRF output. Null on cancel/failure.
-   */
-  authenticate(
-    credentialIds: string[],
-    options?: { throwOnCancel?: boolean },
-  ): Promise<PrfPasskeyResult | null>;
-  /** Derive the AES-256-GCM KEK from a PRF output (HKDF-SHA-256). */
-  deriveKek(prfOutput: ArrayBuffer | Uint8Array): Promise<CryptoKey>;
-
-  /** Create a passkey and wrap the given CEK under it in one flow. */
-  enroll(opts: {
-    user: PasskeyUser;
-    cek: Uint8Array;
-  }): Promise<EnrollResult | null>;
-  /** Authenticate against the given wrapped CEKs and unwrap the matching one. */
-  unlock(wrappedCeks: WrappedCek[]): Promise<UnlockResult | null>;
-  /**
-   * Unwrap the wrapped CEK matching the cached PRF output without a
-   * biometric prompt. Returns null when nothing is cached, no wrapped CEK
-   * matches the cached credential, or the cached output fails to unwrap;
-   * fall back to `unlock()` in that case.
-   */
-  unlockWithCachedPrf(wrappedCeks: WrappedCek[]): Promise<UnlockResult | null>;
-  /**
-   * Re-wrap a CEK using the cached PRF output (no biometric prompt).
-   * Returns null when nothing is cached.
-   */
-  rewrapWithCachedPrf(cek: Uint8Array): Promise<WrappedCek | null>;
-  /** Wrap a CEK under the KEK of an explicit PRF result. */
-  wrapWithPrfResult(
-    prfResult: PrfPasskeyResult,
-    cek: Uint8Array,
-  ): Promise<WrappedCek>;
-  /** Unwrap a CEK with the KEK of an explicit PRF result. */
-  unwrapWithPrfResult(
-    prfResult: PrfPasskeyResult,
-    wrapped: Pick<WrappedCek, "kekIvHex" | "wrappedKeyHex">,
-  ): Promise<Uint8Array>;
-
-  /**
-   * Cached PRF result from local storage, if any. The PRF output is
-   * deterministic for a given passkey, so it can be reused to avoid
-   * re-prompting biometrics on key updates.
-   */
-  getCachedPrfResult(): PrfPasskeyResult | null;
-  clearCachedPrfResult(): void;
-  /** Credential id owned by this device (platform attachment), if known. */
-  getLocalCredentialId(): string | null;
-  setLocalCredentialId(credentialId: string): void;
-  /** Clear all device-local state (e.g. on sign-out). */
-  clearLocalState(): void;
+function mapCeremonyError(error: unknown, operation: string): PasskeyKeyError {
+  if (error instanceof PasskeyKeyError) {
+    if (error.operation) return error;
+    return new PasskeyKeyError(error.category, error.message, {
+      cause: error.cause,
+      operation,
+    });
+  }
+  if (error instanceof DOMException && error.name === "NotAllowedError") {
+    return new PasskeyKeyError(
+      "cancelled",
+      "the prompt was dismissed or no eligible credential was available",
+      { cause: error, operation },
+    );
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return new PasskeyKeyError("cancelled", "the passkey operation was cancelled", {
+      cause: error,
+      operation,
+    });
+  }
+  return new PasskeyKeyError("operation_failed", "the passkey operation failed", {
+    cause: error,
+    operation,
+  });
 }
 
-export function createPasskeyKit(config: PasskeyKitConfig): PasskeyKit {
-  const logger = config.logger ?? {};
-  const storage: StorageAdapter | null =
-    config.storage === undefined ? browserLocalStorageAdapter : config.storage;
-  const storageKeys: PasskeyKitStorageKeys = {
-    ...DEFAULT_STORAGE_KEYS,
-    ...config.storageKeys,
+function context(
+  profile: PasskeyKeyProfileSnapshot,
+  relyingPartyName: string,
+  timeoutMs: number,
+): CeremonyContext {
+  return {
+    rpId: profile.relyingPartyId,
+    rpName: relyingPartyName,
+    prfInput: profile.prfSalt,
+    timeoutMs,
   };
-  // Byte inputs are snapshotted so later caller-side buffer reuse cannot
-  // silently change the PRF domain or KEK derivation between ceremonies.
-  const prfSalt =
-    typeof config.prfSaltInput === "string" || config.prfSaltInput === undefined
-      ? new TextEncoder().encode(
-          config.prfSaltInput ?? TINFOIL_PRF_SALT_INPUT_V1,
-        )
-      : config.prfSaltInput.slice();
-  const hkdfInfo =
-    config.hkdfInfo === undefined
-      ? TINFOIL_HKDF_INFO_V1
-      : typeof config.hkdfInfo === "string"
-        ? config.hkdfInfo
-        : config.hkdfInfo.slice();
+}
 
-  let prfSupportCache: boolean | null = null;
+type PasskeyKeyProfileSnapshot = ReturnType<typeof copyAndValidateProfile>;
 
-  function cachePrfResult(result: PrfPasskeyResult): void {
-    if (!storage) return;
-    const entry: PrfCacheEntry = {
-      credentialId: result.credentialId,
-      prfOutput: bytesToBase64(new Uint8Array(result.prfOutput)),
+function copyUser(user: PasskeyUser): PasskeyUser {
+  if (!user || typeof user !== "object") throw invalidInput("user is required");
+  return {
+    id: user.id instanceof Uint8Array ? user.id.slice() : user.id,
+    name: user.name,
+    displayName: user.displayName,
+  };
+}
+
+function copyWrappedKeys(wrappedKeys: WrappedKey[]): WrappedKey[] {
+  if (!Array.isArray(wrappedKeys) || wrappedKeys.length === 0) {
+    throw invalidInput("at least one wrapped key is required");
+  }
+  return wrappedKeys.map((wrapped) => {
+    if (!wrapped || typeof wrapped !== "object") {
+      throw invalidInput("wrapped key is required");
+    }
+    return {
+      ...wrapped,
+      profile: copyAndValidateProfile(wrapped.profile),
     };
+  });
+}
+
+export function createPasskeyKeyManager(
+  config: PasskeyKeyManagerConfig,
+): PasskeyKeyManager {
+  if (!config || typeof config !== "object") throw invalidInput("manager config is required");
+  const profile = copyAndValidateProfile(config.profile);
+  if (
+    typeof config.relyingPartyName !== "string" ||
+    config.relyingPartyName.length === 0
+  ) {
+    throw invalidInput("relyingPartyName must be a non-empty string");
+  }
+  const relyingPartyName = config.relyingPartyName;
+  if (
+    config.timeoutMs !== undefined &&
+    (!Number.isFinite(config.timeoutMs) ||
+      config.timeoutMs < MIN_TIMEOUT_MS ||
+      config.timeoutMs > MAX_TIMEOUT_MS)
+  ) {
+    throw invalidInput(
+      `timeoutMs must be between ${MIN_TIMEOUT_MS} and ${MAX_TIMEOUT_MS}`,
+    );
+  }
+  const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  let activeCeremony: ActiveCeremony | null = null;
+
+  async function runCeremony(
+    operation: string,
+    callerSignal: AbortSignal | undefined,
+    perform: (signal: AbortSignal) => Promise<InternalPrfResult>,
+  ): Promise<InternalPrfResult> {
+    if (activeCeremony) {
+      throw new PasskeyKeyError(
+        "operation_in_progress",
+        "another passkey ceremony is in progress",
+        { operation },
+      );
+    }
+    if (callerSignal?.aborted) {
+      throw new PasskeyKeyError("cancelled", "the passkey operation was cancelled", {
+        cause: callerSignal.reason,
+        operation,
+      });
+    }
+
+    const token = Symbol(operation);
+    const controller = new AbortController();
+    let rejectInterruption: ((error: PasskeyKeyError) => void) | undefined;
+    const interrupted = new Promise<InternalPrfResult>((_, reject) => {
+      rejectInterruption = reject;
+    });
+    const cancel = (error: PasskeyKeyError) => {
+      rejectInterruption?.(error);
+      controller.abort(error);
+    };
+    activeCeremony = { token, operation, cancel };
+    const cancelFromCaller = () =>
+      cancel(
+        new PasskeyKeyError("cancelled", "the passkey operation was cancelled", {
+          cause: callerSignal?.reason,
+          operation,
+        }),
+      );
+    callerSignal?.addEventListener("abort", cancelFromCaller, { once: true });
+    const timeout = setTimeout(
+      () =>
+        cancel(
+          new PasskeyKeyError("timeout", "the passkey operation timed out", {
+            operation,
+          }),
+        ),
+      timeoutMs,
+    );
+
     try {
-      storage.setItem(storageKeys.prfResult, JSON.stringify(entry));
-    } catch {
-      // best-effort
+      return await Promise.race([perform(controller.signal), interrupted]);
+    } catch (error) {
+      throw mapCeremonyError(error, operation);
+    } finally {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", cancelFromCaller);
+      if (activeCeremony?.token === token) activeCeremony = null;
     }
   }
 
-  function getCachedPrfResult(): PrfPasskeyResult | null {
-    if (!storage) return null;
+  function recordSuccessfulCredential(result: InternalPrfResult): void {
     try {
-      const raw = storage.getItem(storageKeys.prfResult);
-      if (!raw) return null;
-      const entry = JSON.parse(raw) as PrfCacheEntry;
-      return {
-        credentialId: entry.credentialId,
-        prfOutput: base64ToBytes(entry.prfOutput).buffer as ArrayBuffer,
-      };
+      config.storage?.saveCachedPRFResult({
+        profile: copyAndValidateProfile(profile),
+        credentialId: result.credentialId,
+        prfOutput: result.prfOutput.slice(),
+      });
+    } catch {
+      // Storage is best-effort and cannot invalidate a successful ceremony.
+    }
+    if (result.isPlatformAuthenticator) {
+      try {
+        config.storage?.saveLocalCredentialId(result.credentialId);
+      } catch {
+        // Storage is best-effort and cannot invalidate a successful ceremony.
+      }
+    }
+  }
+
+  function loadCachedResult(): CachedPRFResult | null {
+    let result: CachedPRFResult | null;
+    try {
+      result = config.storage?.loadCachedPRFResult() ?? null;
+    } catch {
+      return null;
+    }
+    if (!result) return null;
+    let cachedProfile: PasskeyKeyProfileSnapshot;
+    try {
+      cachedProfile = copyAndValidateProfile(result.profile);
+      validateCredentialId(result.credentialId);
+    } catch {
+      return null;
+    }
+    if (
+      !profilesEqual(cachedProfile, profile) ||
+      !(result.prfOutput instanceof Uint8Array) ||
+      result.prfOutput.length !== 32
+    ) return null;
+    return {
+      profile: cachedProfile,
+      credentialId: result.credentialId,
+      prfOutput: result.prfOutput.slice(),
+    };
+  }
+
+  function loadPreferredCredentialId(): string | null {
+    try {
+      return config.storage?.loadLocalCredentialId() ?? null;
     } catch {
       return null;
     }
   }
 
-  function setLocalCredentialId(credentialId: string): void {
-    storage?.setItem(storageKeys.localCredentialId, credentialId);
-  }
-
-  // Cross-device hybrid (QR-paired phone, etc.) reports
-  // `authenticatorAttachment === 'cross-platform'` on the resulting
-  // credential. Caching the cred id in that case would make this
-  // device look like it has its own passkey when in reality the user
-  // just borrowed another device's passkey for a one-shot unlock.
-  // Per WebAuthn L3 §5.2.1, we only treat `authenticatorAttachment`
-  // of `'platform'` as "this device truly owns this credential".
-  function onPrfResult(
-    result: PrfPasskeyResult,
-    credential: PublicKeyCredential,
-  ): void {
-    cachePrfResult(result);
-    if (credential.authenticatorAttachment === "platform") {
-      try {
-        setLocalCredentialId(result.credentialId);
-      } catch {
-        // best-effort: a throwing custom adapter must not discard the
-        // ceremony result
-      }
+  function orderedCredentialIds(
+    credentialIds: string[],
+    preferredCredentialId?: string,
+  ): string[] {
+    if (!Array.isArray(credentialIds) || credentialIds.length === 0) {
+      throw invalidInput("at least one credentialId is required");
     }
+    const unique = [...new Set(credentialIds)];
+    for (const credentialId of unique) {
+      validateCredentialId(credentialId);
+    }
+    const preferred = preferredCredentialId ?? loadPreferredCredentialId();
+    if (!preferred || !unique.includes(preferred)) return unique;
+    return [preferred, ...unique.filter((credentialId) => credentialId !== preferred)];
   }
 
-  const ceremonyContext: CeremonyContext = {
-    rpId: config.rpId,
-    rpName: config.rpName,
-    prfSalt,
-    webauthnTimeoutMs: config.webauthnTimeoutMs ?? DEFAULT_WEBAUTHN_TIMEOUT_MS,
-    stuckTimeoutMs: config.stuckTimeoutMs ?? DEFAULT_STUCK_TIMEOUT_MS,
-    errorMessages: config.errorMessages,
-    logger,
-    onPrfResult,
-  };
+  function copyPRFOutput(
+    prfResult: { output: Uint8Array },
+    operation: string,
+  ): Uint8Array {
+    if (
+      !prfResult ||
+      typeof prfResult !== "object" ||
+      !(prfResult.output instanceof Uint8Array) ||
+      prfResult.output.length !== 32
+    ) {
+      throw invalidInput("prfResult.output must be exactly 32 bytes", operation);
+    }
+    return prfResult.output.slice();
+  }
 
-  const deriveKek = (prfOutput: ArrayBuffer | Uint8Array) =>
-    deriveKekFromPrf(prfOutput, hkdfInfo);
+  async function wrapKeyWithPRFResult(
+    input: WrapKeyWithPRFResultInput,
+    operation = "wrapKeyWithPRFResult",
+  ): Promise<WrappedKey> {
+    if (!input || typeof input !== "object") throw invalidInput("input is required", operation);
+    validateKey(input.keyMaterial, operation);
+    validateCredentialId(input.credentialId);
+    const keyMaterial = input.keyMaterial.slice();
+    const prfOutput = copyPRFOutput(input.prfResult, operation);
+    return wrapKey(
+      profile,
+      input.credentialId,
+      prfOutput,
+      keyMaterial,
+      operation,
+    );
+  }
 
-  async function wrapWithPrfResult(
-    prfResult: PrfPasskeyResult,
-    cek: Uint8Array,
-  ): Promise<WrappedCek> {
-    const kek = await deriveKek(prfResult.prfOutput);
-    return wrapCek({ credentialId: prfResult.credentialId, kek, cek });
+  async function unwrapKeyWithPRFResult(
+    input: UnwrapKeyWithPRFResultInput,
+    operation = "unwrapKeyWithPRFResult",
+  ): Promise<Uint8Array> {
+    if (!input || typeof input !== "object") throw invalidInput("input is required", operation);
+    const wrappedKey = {
+      ...input.wrappedKey,
+      profile: copyAndValidateProfile(input.wrappedKey?.profile),
+    };
+    validateWrappedKey(wrappedKey, profile);
+    const prfOutput = copyPRFOutput(input.prfResult, operation);
+    return unwrapKey(profile, prfOutput, wrappedKey, operation);
+  }
+
+  async function createAndWrapKey(input: CreateAndWrapKeyInput) {
+    if (!input || typeof input !== "object") throw invalidInput("input is required");
+    validateKey(input.key, "createAndWrapKey");
+    const key = input.key.slice();
+    const user = copyUser(input.user);
+    const result = await runCeremony("createAndWrapKey", input.signal, (signal) =>
+      createPrfCredential(context(profile, relyingPartyName, timeoutMs), user, signal),
+    );
+    recordSuccessfulCredential(result);
+    const wrappedKey = await wrapKeyWithPRFResult(
+      {
+        keyMaterial: key,
+        credentialId: result.credentialId,
+        prfResult: { output: result.prfOutput },
+      },
+      "createAndWrapKey",
+    );
+    return { credentialId: result.credentialId, wrappedKey };
+  }
+
+  function prepareRecovery(input: RecoverKeyInput) {
+    if (!input || typeof input !== "object") throw invalidInput("input is required");
+    const wrappedKeys = copyWrappedKeys(input.wrappedKeys);
+    for (const wrapped of wrappedKeys) validateWrappedKey(wrapped, profile);
+    return wrappedKeys;
+  }
+
+  async function evaluateCredential(
+    input: EvaluateCredentialInput,
+    operation = "evaluateCredential",
+  ) {
+    if (!input || typeof input !== "object") throw invalidInput("input is required");
+    const interaction = input.interaction ?? "interactive";
+    if (interaction !== "interactive" && interaction !== "immediatelyAvailable") {
+      throw invalidInput("interaction must be interactive or immediatelyAvailable", operation);
+    }
+    if (interaction === "immediatelyAvailable") {
+      throw new PasskeyKeyError(
+        "unsupported",
+        "immediatelyAvailable credential evaluation is not supported in browsers",
+        { operation },
+      );
+    }
+    const credentialIds = orderedCredentialIds(
+      input.credentialIds,
+      input.preferredCredentialId,
+    );
+    const result = await runCeremony(operation, input.signal, (signal) =>
+      evaluatePrfCredential(
+        context(profile, relyingPartyName, timeoutMs),
+        credentialIds,
+        signal,
+      ),
+    );
+    recordSuccessfulCredential(result);
+    return {
+      credentialId: result.credentialId,
+      prfResult: { output: result.prfOutput.slice() },
+    };
   }
 
   return {
-    async isPrfSupported(): Promise<boolean> {
-      if (prfSupportCache !== null) return prfSupportCache;
-      prfSupportCache = await detectPrfSupport();
-      return prfSupportCache;
-    },
-
-    resetPrfSupportCache(): void {
-      prfSupportCache = null;
-    },
-
-    createPasskey(user: PasskeyUser): Promise<PrfPasskeyResult | null> {
-      return createPrfPasskey(ceremonyContext, user);
-    },
-
-    async authenticate(
-      credentialIds: string[],
-      options: { throwOnCancel?: boolean } = {},
-    ): Promise<PrfPasskeyResult | null> {
-      // An empty allowCredentials list would start a discoverable-passkey
-      // ceremony against ANY credential, breaking the "only the supplied
-      // ids" contract.
-      if (credentialIds.length === 0) return null;
-      return authenticatePrfPasskey(ceremonyContext, credentialIds, options);
-    },
-
-    deriveKek,
-
-    async enroll(opts: {
-      user: PasskeyUser;
-      cek: Uint8Array;
-    }): Promise<EnrollResult | null> {
-      const prfResult = await createPrfPasskey(ceremonyContext, opts.user);
-      if (!prfResult) return null;
-      const wrappedCek = await wrapWithPrfResult(prfResult, opts.cek);
-      return { credentialId: prfResult.credentialId, wrappedCek, prfResult };
-    },
-
-    async unlock(wrappedCeks: WrappedCek[]): Promise<UnlockResult | null> {
-      if (wrappedCeks.length === 0) return null;
-      const prfResult = await authenticatePrfPasskey(
-        ceremonyContext,
-        wrappedCeks.map((w) => w.credentialId),
-      );
-      if (!prfResult) return null;
-      const match = wrappedCeks.find(
-        (w) => w.credentialId === prfResult.credentialId,
-      );
-      if (!match) {
-        logger.error?.(
-          "assertion matched a credential with no wrapped CEK",
-          undefined,
-          { action: "unlock", credentialId: prfResult.credentialId },
-        );
-        return null;
+    async capability(input) {
+      if (
+        !input ||
+        typeof input !== "object" ||
+        (input.operation !== "enroll" && input.operation !== "recover")
+      ) {
+        throw invalidInput("operation must be enroll or recover", "capability");
       }
-      const kek = await deriveKek(prfResult.prfOutput);
-      const cek = await unwrapCek(kek, match);
-      return { credentialId: prfResult.credentialId, cek };
+      return detectCapability(input.operation);
     },
 
-    async unlockWithCachedPrf(
-      wrappedCeks: WrappedCek[],
-    ): Promise<UnlockResult | null> {
-      const cached = getCachedPrfResult();
-      if (!cached) return null;
-      const match = wrappedCeks.find(
-        (w) => w.credentialId === cached.credentialId,
+    createAndWrapKey,
+
+    evaluateCredential(input) {
+      return evaluateCredential(input);
+    },
+
+    wrapKeyWithPRFResult(input) {
+      return wrapKeyWithPRFResult(input);
+    },
+
+    unwrapKeyWithPRFResult(input) {
+      return unwrapKeyWithPRFResult(input);
+    },
+
+    async recoverKey(input) {
+      const wrappedKeys = prepareRecovery(input);
+      const result = await evaluateCredential(
+        {
+          credentialIds: wrappedKeys.map((wrapped) => wrapped.credentialId),
+          preferredCredentialId: input.preferredCredentialId,
+          signal: input.signal,
+          interaction: input.interaction,
+        },
+        "recoverKey",
       );
-      if (!match) return null;
+      const wrapped = wrappedKeys.find(
+        (candidate) => candidate.credentialId === result.credentialId,
+      );
+      if (!wrapped) throw invalidInput("credential has no matching wrapped key", "recoverKey");
+      return {
+        credentialId: result.credentialId,
+        key: await unwrapKeyWithPRFResult(
+          { wrappedKey: wrapped, prfResult: result.prfResult },
+          "recoverKey",
+        ),
+      };
+    },
+
+    async recoverKeyFromCache(input) {
+      const wrappedKeys = prepareRecovery(input);
+      const cached = loadCachedResult();
+      if (!cached) return null;
+      const wrapped = wrappedKeys.find(
+        (candidate) => candidate.credentialId === cached.credentialId,
+      );
+      if (!wrapped) return null;
       try {
-        const kek = await deriveKek(cached.prfOutput);
-        const cek = await unwrapCek(kek, match);
-        return { credentialId: cached.credentialId, cek };
-      } catch (error) {
-        logger.error?.("failed to unwrap CEK with cached PRF output", error, {
-          action: "unlockWithCachedPrf",
+        return {
           credentialId: cached.credentialId,
-        });
+          key: await unwrapKeyWithPRFResult(
+            {
+              wrappedKey: wrapped,
+              prfResult: { output: cached.prfOutput },
+            },
+            "recoverKeyFromCache",
+          ),
+        };
+      } catch {
         return null;
       }
     },
 
-    async rewrapWithCachedPrf(cek: Uint8Array): Promise<WrappedCek | null> {
-      const cached = getCachedPrfResult();
+    async rewrapKeyFromCache(input) {
+      if (!input || typeof input !== "object") throw invalidInput("input is required");
+      validateKey(input.key, "rewrapKeyFromCache");
+      const cached = loadCachedResult();
       if (!cached) return null;
-      return wrapWithPrfResult(cached, cek);
+      return wrapKeyWithPRFResult(
+        {
+          keyMaterial: input.key,
+          credentialId: cached.credentialId,
+          prfResult: { output: cached.prfOutput },
+        },
+        "rewrapKeyFromCache",
+      );
     },
 
-    wrapWithPrfResult,
-
-    async unwrapWithPrfResult(
-      prfResult: PrfPasskeyResult,
-      wrapped: Pick<WrappedCek, "kekIvHex" | "wrappedKeyHex">,
-    ): Promise<Uint8Array> {
-      const kek = await deriveKek(prfResult.prfOutput);
-      return unwrapCek(kek, wrapped);
+    clearLocalState() {
+      try {
+        config.storage?.clear();
+      } catch {
+        // Storage is best-effort.
+      }
     },
 
-    getCachedPrfResult,
-
-    clearCachedPrfResult(): void {
-      storage?.removeItem(storageKeys.prfResult);
-    },
-
-    getLocalCredentialId(): string | null {
-      return storage?.getItem(storageKeys.localCredentialId) ?? null;
-    },
-
-    setLocalCredentialId,
-
-    clearLocalState(): void {
-      storage?.removeItem(storageKeys.prfResult);
-      storage?.removeItem(storageKeys.localCredentialId);
+    cancelActiveCeremony() {
+      const operation = activeCeremony?.operation;
+      activeCeremony?.cancel(
+        new PasskeyKeyError("cancelled", "the passkey operation was cancelled", {
+          operation,
+        }),
+      );
     },
   };
 }

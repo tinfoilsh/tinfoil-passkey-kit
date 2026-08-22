@@ -1,61 +1,47 @@
-/**
- * PRF support detection.
- *
- * Checks whether the current browser/platform supports the WebAuthn PRF
- * extension. This is an optimistic check — actual PRF support is only
- * confirmed when a credential is created with prf.enabled: true in the
- * response. If creation fails, callers should fall back to a manual flow.
- *
- * Detection strategy:
- * 1. Check window.PublicKeyCredential exists (basic WebAuthn support)
- * 2. Check isUserVerifyingPlatformAuthenticatorAvailable() (biometric/PIN authenticator present)
- * 3. Optionally check getClientCapabilities() for explicit PRF support signal (new API, not universal)
- */
-export async function detectPrfSupport(): Promise<boolean> {
-  if (typeof window === 'undefined') {
-    return false
-  }
+import type { PasskeyCapability } from "./types.js";
 
-  if (!window.PublicKeyCredential) {
-    return false
-  }
+function hasWebAuthn(operation: "enroll" | "recover"): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    !!navigator.credentials &&
+    typeof navigator.credentials[operation === "enroll" ? "create" : "get"] ===
+      "function" &&
+    typeof PublicKeyCredential !== "undefined"
+  );
+}
 
-  // Check that a platform authenticator is available (Face ID, Touch ID, Windows Hello, etc.)
+async function prfCapability(): Promise<PasskeyCapability> {
+  const credentialClass = PublicKeyCredential as typeof PublicKeyCredential & {
+    getClientCapabilities?: () => Promise<Record<string, boolean>>;
+  };
+  if (typeof credentialClass.getClientCapabilities !== "function") return "unknown";
   try {
-    const available =
-      await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()
-    if (!available) {
-      return false
+    const capabilities = await credentialClass.getClientCapabilities();
+    const reported = capabilities["extension:prf"];
+    if (reported === true) return "supported";
+    if (reported === false) return "unsupported";
+  } catch {
+    return "unknown";
+  }
+  return "unknown";
+}
+
+export async function capability(
+  operation: "enroll" | "recover",
+): Promise<PasskeyCapability> {
+  if (!hasWebAuthn(operation)) return "unsupported";
+  if (operation === "recover") return prfCapability();
+  if (
+    typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable !== "function"
+  ) {
+    return "unknown";
+  }
+  try {
+    if (!(await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())) {
+      return "unsupported";
     }
   } catch {
-    return false
+    return "unknown";
   }
-
-  // If getClientCapabilities is available, use it for a more precise check.
-  // This API is newer and may not be present in all browsers.
-  try {
-    if (typeof PublicKeyCredential.getClientCapabilities === 'function') {
-      const caps = await PublicKeyCredential.getClientCapabilities()
-      if (caps && typeof caps === 'object') {
-        // The shape of this API varies across browser versions.
-        // Chrome returns a map-like object; check for extension-prf or prf key.
-        const hasPrf =
-          (caps as Record<string, boolean>)['extension-prf'] === true ||
-          (caps as Record<string, boolean>)['prf'] === true
-        if (hasPrf) {
-          return true
-        }
-        // If getClientCapabilities is available but doesn't report PRF,
-        // that's a strong negative signal on platforms that implement it.
-        // However, since this API is still evolving, we don't treat absence
-        // as definitive — fall through to the optimistic path.
-      }
-    }
-  } catch {
-    // getClientCapabilities not available or threw — fall through
-  }
-
-  // Optimistic: platform authenticator is available, WebAuthn is supported.
-  // Actual PRF support will be confirmed during credential creation.
-  return true
+  return prfCapability();
 }
