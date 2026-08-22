@@ -37,14 +37,28 @@ enum KeyWrappingCrypto {
         profile: PasskeyKeyProfile,
         credentialId: String,
         prfOutput: Data,
+        key: Data
+    ) throws -> WrappedKey {
+        try wrapForTesting(
+            profile: profile,
+            credentialId: credentialId,
+            prfOutput: prfOutput,
+            key: key,
+            iv: randomData(count: ivByteCount)
+        )
+    }
+
+    static func wrapForTesting(
+        profile: PasskeyKeyProfile,
+        credentialId: String,
+        prfOutput: Data,
         key: Data,
-        iv suppliedIV: Data? = nil
+        iv: Data
     ) throws -> WrappedKey {
         try validateKey(key)
         try validatePRFOutput(prfOutput)
         _ = try ByteCodec.base64URLDecode(credentialId)
         do {
-            let iv = try suppliedIV ?? randomData(count: ivByteCount)
             guard iv.count == ivByteCount else {
                 throw PasskeyKeyError.invalidInput(diagnostic: "AES-GCM IV must be exactly 12 bytes")
             }

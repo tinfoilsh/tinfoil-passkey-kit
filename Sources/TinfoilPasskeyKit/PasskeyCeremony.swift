@@ -3,6 +3,11 @@ import CryptoKit
 import Foundation
 import Security
 
+@MainActor
+public protocol PasskeyPresentationAnchorProviding: AnyObject {
+    var presentationAnchor: ASPresentationAnchor { get }
+}
+
 struct CeremonyResult: Sendable {
     let credentialId: String
     let prfOutput: Data
@@ -38,6 +43,12 @@ protocol CeremonyDriving: AnyObject {
 
 @MainActor
 final class ApplePasskeyCeremonyDriver: CeremonyDriving {
+    private let presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)?
+
+    init(presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)? = nil) {
+        self.presentationAnchorProvider = presentationAnchorProvider
+    }
+
     func capability(operation: PasskeyOperation) async -> PasskeyCapability {
         switch operation {
         case .enroll:
@@ -54,7 +65,10 @@ final class ApplePasskeyCeremonyDriver: CeremonyDriving {
         request: CeremonyRequest,
         completion: @escaping @MainActor (Result<CeremonyResult, Error>) -> Void
     ) throws -> any CeremonyControlling {
-        let controller = ApplePasskeyCeremonyController(completion: completion)
+        let controller = ApplePasskeyCeremonyController(
+            presentationAnchorProvider: presentationAnchorProvider,
+            completion: completion
+        )
         try controller.start(request)
         return controller
     }
@@ -68,8 +82,14 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
     private var completion: (@MainActor (Result<CeremonyResult, Error>) -> Void)?
     private var fallbackProfile: PasskeyKeyProfile?
     private var createdCredentialId: String?
+    private let presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)?
+    private var presentationContextProvider: ApplePresentationContextProvider?
 
-    init(completion: @escaping @MainActor (Result<CeremonyResult, Error>) -> Void) {
+    init(
+        presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)?,
+        completion: @escaping @MainActor (Result<CeremonyResult, Error>) -> Void
+    ) {
+        self.presentationAnchorProvider = presentationAnchorProvider
         self.completion = completion
     }
 
@@ -85,6 +105,7 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
                 name: user.name,
                 userID: user.id
             )
+            registration.displayName = user.displayName ?? user.name
             registration.userVerificationPreference = .required
             registration.prf = .inputValues(.saltInput1(profile.prfSalt))
             perform(requests: [registration], interaction: .interactive)
@@ -107,7 +128,7 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
         credentialIds: [String],
         interaction: PasskeyInteraction
     ) throws {
-        let ids = try credentialIds.map(ByteCodec.base64URLDecode)
+        let ids = try credentialIds.map { try ByteCodec.base64URLDecode($0) }
         let platformProvider = ASAuthorizationPlatformPublicKeyCredentialProvider(
             relyingPartyIdentifier: profile.relyingPartyId
         )
@@ -129,6 +150,13 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
     ) {
         let controller = ASAuthorizationController(authorizationRequests: requests)
         controller.delegate = self
+        if let presentationAnchorProvider {
+            let contextProvider = ApplePresentationContextProvider(
+                anchorProvider: presentationAnchorProvider
+            )
+            presentationContextProvider = contextProvider
+            controller.presentationContextProvider = contextProvider
+        }
         authorizationController = controller
         switch interaction {
         case .interactive:
@@ -155,11 +183,26 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
         guard let completion else { return }
         self.completion = nil
         authorizationController = nil
+        presentationContextProvider = nil
         completion(result)
     }
 
     private func data(from key: SymmetricKey) -> Data {
         key.withUnsafeBytes { Data($0) }
+    }
+}
+
+@MainActor
+private final class ApplePresentationContextProvider: NSObject,
+    ASAuthorizationControllerPresentationContextProviding {
+    private let anchorProvider: any PasskeyPresentationAnchorProviding
+
+    init(anchorProvider: any PasskeyPresentationAnchorProviding) {
+        self.anchorProvider = anchorProvider
+    }
+
+    func presentationAnchor(for controller: ASAuthorizationController) -> ASPresentationAnchor {
+        anchorProvider.presentationAnchor
     }
 }
 

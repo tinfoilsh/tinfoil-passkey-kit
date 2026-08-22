@@ -70,7 +70,7 @@ private struct ProfileCodingKey: CodingKey {
     }
 }
 
-public struct WrappedKey: Codable, Equatable, Sendable {
+public struct WrappedKey: Equatable, Sendable {
     public let profile: PasskeyKeyProfile
     public let credentialId: String
     public let kekIvHex: String

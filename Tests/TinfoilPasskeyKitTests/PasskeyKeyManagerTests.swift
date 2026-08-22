@@ -265,17 +265,29 @@ final class PasskeyKeyManagerTests: XCTestCase {
             keyMaterial: Data(count: 31),
             credentialId: "AQ",
             prfResult: prfResult
-        ))
+        )) { error in
+            guard case PasskeyKeyError.invalidInput = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
         XCTAssertThrowsError(try manager.wrapKeyWithPRFResult(
             keyMaterial: Data(count: 32),
             credentialId: "AB",
             prfResult: prfResult
-        ))
+        )) { error in
+            guard case PasskeyKeyError.invalidInput = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
         XCTAssertThrowsError(try manager.wrapKeyWithPRFResult(
             keyMaterial: Data(count: 32),
             credentialId: "AQ",
             prfResult: PRFResult(output: Data(count: 31))
-        ))
+        )) { error in
+            guard case PasskeyKeyError.invalidInput = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
 
         let wrappedKey = try manager.wrapKeyWithPRFResult(
             keyMaterial: Data(count: 32),
@@ -285,7 +297,11 @@ final class PasskeyKeyManagerTests: XCTestCase {
         XCTAssertThrowsError(try manager.unwrapKeyWithPRFResult(
             wrappedKey: wrappedKey,
             prfResult: PRFResult(output: Data(count: 31))
-        ))
+        )) { error in
+            guard case PasskeyKeyError.invalidInput = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
         let otherProfile = try PasskeyKeyProfile(
             version: 1,
             relyingPartyId: profile.relyingPartyId,
@@ -300,7 +316,11 @@ final class PasskeyKeyManagerTests: XCTestCase {
                 wrappedKeyHex: wrappedKey.wrappedKeyHex
             ),
             prfResult: prfResult
-        ))
+        )) { error in
+            guard case PasskeyKeyError.invalidInput = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
 
         var ciphertext = try ByteCodec.hexDecode(wrappedKey.wrappedKeyHex)
         ciphertext[0] ^= .max
@@ -473,7 +493,7 @@ final class PasskeyKeyManagerTests: XCTestCase {
     }
 
     private func fixtureWrappedKey(credentialId: String, prfOutput: Data) -> WrappedKey {
-        try! KeyWrappingCrypto.wrap(
+        try! KeyWrappingCrypto.wrapForTesting(
             profile: profile,
             credentialId: credentialId,
             prfOutput: prfOutput,

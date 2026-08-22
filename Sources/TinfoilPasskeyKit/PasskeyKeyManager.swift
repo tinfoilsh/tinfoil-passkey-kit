@@ -25,6 +25,7 @@ public final class PasskeyKeyManager {
         profile: PasskeyKeyProfile,
         relyingPartyName: String,
         storage: (any PasskeyKeyStorage)? = nil,
+        presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)? = nil,
         timeout: TimeInterval = 60
     ) throws {
         try self.init(
@@ -32,7 +33,9 @@ public final class PasskeyKeyManager {
             relyingPartyName: relyingPartyName,
             storage: storage,
             timeout: timeout,
-            ceremonyDriver: ApplePasskeyCeremonyDriver()
+            ceremonyDriver: ApplePasskeyCeremonyDriver(
+                presentationAnchorProvider: presentationAnchorProvider
+            )
         )
     }
 

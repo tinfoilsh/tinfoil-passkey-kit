@@ -21,7 +21,11 @@ final class ByteCodecTests: XCTestCase {
             }
         }
         for value in ["", "a", "AB", "AQ==", "!"] {
-            XCTAssertThrowsError(try ByteCodec.base64URLDecode(value))
+            XCTAssertThrowsError(
+                try ByteCodec.base64URLDecode(value, field: "profile.prfSalt")
+            ) { error in
+                XCTAssertTrue(error.localizedDescription.contains("profile.prfSalt"))
+            }
         }
     }
 }

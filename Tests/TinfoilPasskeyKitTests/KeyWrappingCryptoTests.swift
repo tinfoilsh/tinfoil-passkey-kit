@@ -37,7 +37,7 @@ final class KeyWrappingCryptoTests: XCTestCase {
             prfSalt: Data("test-prf".utf8),
             hkdfInfo: Data("test-kek".utf8)
         )
-        let wrapped = try KeyWrappingCrypto.wrap(
+        let wrapped = try KeyWrappingCrypto.wrapForTesting(
             profile: fixtureProfile,
             credentialId: "AQID",
             prfOutput: Data(repeating: 3, count: 32),
@@ -56,7 +56,7 @@ final class KeyWrappingCryptoTests: XCTestCase {
         XCTAssertThrowsError(try KeyWrappingCrypto.validateKey(Data(count: 31)))
         XCTAssertThrowsError(try KeyWrappingCrypto.validatePRFOutput(Data(count: 31)))
 
-        let wrapped = try KeyWrappingCrypto.wrap(
+        let wrapped = try KeyWrappingCrypto.wrapForTesting(
             profile: profile,
             credentialId: "AQ",
             prfOutput: Data(count: 32),

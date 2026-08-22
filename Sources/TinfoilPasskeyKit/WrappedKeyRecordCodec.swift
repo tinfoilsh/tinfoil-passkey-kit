@@ -80,8 +80,8 @@ public func decodeWrappedKeyRecord(_ json: Data) throws -> WrappedKey {
     let profile = try PasskeyKeyProfile(
         version: 1,
         relyingPartyId: relyingPartyId,
-        prfSalt: ByteCodec.base64URLDecode(prfSalt),
-        hkdfInfo: ByteCodec.base64URLDecode(hkdfInfo)
+        prfSalt: ByteCodec.base64URLDecode(prfSalt, field: "profile.prfSalt"),
+        hkdfInfo: ByteCodec.base64URLDecode(hkdfInfo, field: "profile.hkdfInfo")
     )
     let wrappedKey = WrappedKey(
         profile: profile,

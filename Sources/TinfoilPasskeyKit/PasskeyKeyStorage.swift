@@ -99,6 +99,16 @@ public final class KeychainPasskeyKeyStorage: PasskeyKeyStorage {
         var query = baseQuery
         attributes.forEach { query[$0.key] = $0.value }
         let addStatus = SecItemAdd(query as CFDictionary, nil)
+        if addStatus == errSecDuplicateItem {
+            let retryStatus = SecItemUpdate(
+                baseQuery as CFDictionary,
+                attributes as CFDictionary
+            )
+            guard retryStatus == errSecSuccess else {
+                throw storageError(retryStatus)
+            }
+            return
+        }
         guard addStatus == errSecSuccess else {
             throw storageError(addStatus)
         }

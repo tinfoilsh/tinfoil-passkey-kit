@@ -12,11 +12,14 @@ enum ByteCodec {
             .replacingOccurrences(of: "=", with: "")
     }
 
-    static func base64URLDecode(_ string: String) throws -> Data {
+    static func base64URLDecode(
+        _ string: String,
+        field: String = "credential ID"
+    ) throws -> Data {
         guard !string.isEmpty,
               string.range(of: "^[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
               string.count % base64QuantumCharacterCount != 1 else {
-            throw PasskeyKeyError.invalidInput(diagnostic: "credential ID must be unpadded base64url")
+            throw PasskeyKeyError.invalidInput(diagnostic: "\(field) must be unpadded base64url")
         }
         var base64 = string
             .replacingOccurrences(of: "-", with: "+")
@@ -28,7 +31,7 @@ enum ByteCodec {
         guard let data = Data(base64Encoded: base64),
               !data.isEmpty,
               base64URLEncode(data) == string else {
-            throw PasskeyKeyError.invalidInput(diagnostic: "credential ID must be unpadded base64url")
+            throw PasskeyKeyError.invalidInput(diagnostic: "\(field) must be unpadded base64url")
         }
         return data
     }
