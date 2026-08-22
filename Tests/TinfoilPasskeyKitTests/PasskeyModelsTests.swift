@@ -6,10 +6,9 @@ import XCTest
 final class PasskeyModelsTests: XCTestCase {
     func testProfileValidatesEveryField() {
         XCTAssertThrowsError(try profile(version: 0))
-        XCTAssertThrowsError(try profile(version: 9_007_199_254_740_992))
-        XCTAssertNoThrow(try profile(version: 9_007_199_254_740_991))
+        XCTAssertThrowsError(try profile(version: 2))
+        XCTAssertNoThrow(try profile(version: 1))
         XCTAssertThrowsError(try profile(relyingPartyId: ""))
-        XCTAssertThrowsError(try profile(relyingPartyName: ""))
         XCTAssertThrowsError(try profile(prfSalt: Data()))
         XCTAssertThrowsError(try profile(hkdfInfo: Data()))
     }
@@ -25,7 +24,6 @@ final class PasskeyModelsTests: XCTestCase {
         {
           "version": 1,
           "relyingPartyId": "example.com",
-          "relyingPartyName": "Example",
           "prfSalt": "AQ==",
           "hkdfInfo": "Ag==",
           "extra": true
@@ -40,22 +38,27 @@ final class PasskeyModelsTests: XCTestCase {
         let value = try profile()
         for timeout in [0, -1, .infinity, .nan] {
             XCTAssertThrowsError(
-                try PasskeyKeyManager(profile: value, timeout: timeout)
+                try PasskeyKeyManager(
+                    profile: value,
+                    relyingPartyName: "Example",
+                    timeout: timeout
+                )
             )
         }
+        XCTAssertThrowsError(
+            try PasskeyKeyManager(profile: value, relyingPartyName: "")
+        )
     }
 
     private func profile(
         version: Int = 1,
         relyingPartyId: String = "example.com",
-        relyingPartyName: String = "Example",
         prfSalt: Data = Data([1]),
         hkdfInfo: Data = Data([2])
     ) throws -> PasskeyKeyProfile {
         try PasskeyKeyProfile(
             version: version,
             relyingPartyId: relyingPartyId,
-            relyingPartyName: relyingPartyName,
             prfSalt: prfSalt,
             hkdfInfo: hkdfInfo
         )

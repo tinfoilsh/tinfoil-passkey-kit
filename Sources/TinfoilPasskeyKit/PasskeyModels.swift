@@ -1,39 +1,29 @@
 import Foundation
 
 public struct PasskeyKeyProfile: Codable, Equatable, Sendable {
-    private static let maximumInteroperableVersion = 9_007_199_254_740_991
-
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case version
         case relyingPartyId
-        case relyingPartyName
         case prfSalt
         case hkdfInfo
     }
 
     public let version: Int
     public let relyingPartyId: String
-    public let relyingPartyName: String
     public let prfSalt: Data
     public let hkdfInfo: Data
 
     public init(
         version: Int,
         relyingPartyId: String,
-        relyingPartyName: String,
         prfSalt: Data,
         hkdfInfo: Data
     ) throws {
-        guard version > 0, version <= Self.maximumInteroperableVersion else {
-            throw PasskeyKeyError.invalidInput(
-                diagnostic: "profile version must be a positive JavaScript safe integer"
-            )
+        guard version == 1 else {
+            throw PasskeyKeyError.invalidInput(diagnostic: "profile version must be 1")
         }
         guard !relyingPartyId.isEmpty else {
             throw PasskeyKeyError.invalidInput(diagnostic: "relying-party ID must not be empty")
-        }
-        guard !relyingPartyName.isEmpty else {
-            throw PasskeyKeyError.invalidInput(diagnostic: "relying-party name must not be empty")
         }
         guard !prfSalt.isEmpty else {
             throw PasskeyKeyError.invalidInput(diagnostic: "PRF salt must not be empty")
@@ -43,7 +33,6 @@ public struct PasskeyKeyProfile: Codable, Equatable, Sendable {
         }
         self.version = version
         self.relyingPartyId = relyingPartyId
-        self.relyingPartyName = relyingPartyName
         self.prfSalt = prfSalt
         self.hkdfInfo = hkdfInfo
     }
@@ -60,7 +49,6 @@ public struct PasskeyKeyProfile: Codable, Equatable, Sendable {
         try self.init(
             version: values.decode(Int.self, forKey: .version),
             relyingPartyId: values.decode(String.self, forKey: .relyingPartyId),
-            relyingPartyName: values.decode(String.self, forKey: .relyingPartyName),
             prfSalt: values.decode(Data.self, forKey: .prfSalt),
             hkdfInfo: values.decode(Data.self, forKey: .hkdfInfo)
         )
@@ -130,6 +118,29 @@ public struct RecoveredKey: Equatable, Sendable {
     public init(credentialId: String, key: Data) {
         self.credentialId = credentialId
         self.key = key
+    }
+}
+
+public enum PasskeyInteraction: Equatable, Sendable {
+    case interactive
+    case immediatelyAvailable
+}
+
+public struct PRFResult: Equatable, Sendable {
+    public let output: Data
+
+    public init(output: Data) {
+        self.output = output
+    }
+}
+
+public struct EvaluatedCredential: Equatable, Sendable {
+    public let credentialId: String
+    public let prfResult: PRFResult
+
+    public init(credentialId: String, prfResult: PRFResult) {
+        self.credentialId = credentialId
+        self.prfResult = prfResult
     }
 }
 

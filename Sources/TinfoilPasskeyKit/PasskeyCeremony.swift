@@ -3,11 +3,6 @@ import CryptoKit
 import Foundation
 import Security
 
-enum CeremonyMode {
-    case interactive
-    case immediatelyAvailable
-}
-
 struct CeremonyResult: Sendable {
     let credentialId: String
     let prfOutput: Data
@@ -15,8 +10,16 @@ struct CeremonyResult: Sendable {
 }
 
 enum CeremonyRequest: Sendable {
-    case create(profile: PasskeyKeyProfile, user: PasskeyUser, mode: CeremonyMode)
-    case recover(profile: PasskeyKeyProfile, credentialIds: [String], mode: CeremonyMode)
+    case create(
+        profile: PasskeyKeyProfile,
+        relyingPartyName: String,
+        user: PasskeyUser
+    )
+    case recover(
+        profile: PasskeyKeyProfile,
+        credentialIds: [String],
+        interaction: PasskeyInteraction
+    )
 }
 
 @MainActor
@@ -64,7 +67,6 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
     private var authorizationController: ASAuthorizationController?
     private var completion: (@MainActor (Result<CeremonyResult, Error>) -> Void)?
     private var fallbackProfile: PasskeyKeyProfile?
-    private var fallbackMode: CeremonyMode = .interactive
     private var createdCredentialId: String?
 
     init(completion: @escaping @MainActor (Result<CeremonyResult, Error>) -> Void) {
@@ -73,9 +75,8 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
 
     func start(_ request: CeremonyRequest) throws {
         switch request {
-        case .create(let profile, let user, let mode):
+        case .create(let profile, _, let user):
             fallbackProfile = profile
-            fallbackMode = mode
             let provider = ASAuthorizationPlatformPublicKeyCredentialProvider(
                 relyingPartyIdentifier: profile.relyingPartyId
             )
@@ -86,9 +87,13 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
             )
             registration.userVerificationPreference = .required
             registration.prf = .inputValues(.saltInput1(profile.prfSalt))
-            perform(requests: [registration], mode: mode)
-        case .recover(let profile, let credentialIds, let mode):
-            try performRecovery(profile: profile, credentialIds: credentialIds, mode: mode)
+            perform(requests: [registration], interaction: .interactive)
+        case .recover(let profile, let credentialIds, let interaction):
+            try performRecovery(
+                profile: profile,
+                credentialIds: credentialIds,
+                interaction: interaction
+            )
         }
     }
 
@@ -100,7 +105,7 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
     private func performRecovery(
         profile: PasskeyKeyProfile,
         credentialIds: [String],
-        mode: CeremonyMode
+        interaction: PasskeyInteraction
     ) throws {
         let ids = try credentialIds.map(ByteCodec.base64URLDecode)
         let platformProvider = ASAuthorizationPlatformPublicKeyCredentialProvider(
@@ -134,14 +139,17 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
             securityRequest.prf = .inputValues(.saltInput1(profile.prfSalt))
             requests.append(securityRequest)
         }
-        perform(requests: requests, mode: mode)
+        perform(requests: requests, interaction: interaction)
     }
 
-    private func perform(requests: [ASAuthorizationRequest], mode: CeremonyMode) {
+    private func perform(
+        requests: [ASAuthorizationRequest],
+        interaction: PasskeyInteraction
+    ) {
         let controller = ASAuthorizationController(authorizationRequests: requests)
         controller.delegate = self
         authorizationController = controller
-        switch mode {
+        switch interaction {
         case .interactive:
             controller.performRequests()
         case .immediatelyAvailable:
@@ -207,7 +215,7 @@ extension ApplePasskeyCeremonyController: ASAuthorizationControllerDelegate {
                 try performRecovery(
                     profile: profile,
                     credentialIds: [credentialId],
-                    mode: fallbackMode
+                    interaction: .interactive
                 )
             } catch {
                 finish(.failure(error))

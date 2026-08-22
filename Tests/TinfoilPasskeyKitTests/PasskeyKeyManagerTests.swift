@@ -7,7 +7,6 @@ final class PasskeyKeyManagerTests: XCTestCase {
     private let profile = try! PasskeyKeyProfile(
         version: 1,
         relyingPartyId: "example.com",
-        relyingPartyName: "Example",
         prfSalt: Data("test-prf".utf8),
         hkdfInfo: Data("test-kek".utf8)
     )
@@ -32,13 +31,16 @@ final class PasskeyKeyManagerTests: XCTestCase {
         XCTAssertEqual(created.wrappedKey.profile, profile)
         XCTAssertEqual(recovered, RecoveredKey(credentialId: "AQID", key: key))
         XCTAssertEqual(try storage.loadCachedPRFResult()?.profile, profile)
+        guard case .create(_, let relyingPartyName, _) = driver.requests[0] else {
+            return XCTFail("Expected creation request")
+        }
+        XCTAssertEqual(relyingPartyName, "Example")
     }
 
     func testRejectsProfileMismatchMalformedInputAndOpaqueHandleLimit() async throws {
         let otherProfile = try PasskeyKeyProfile(
             version: 1,
             relyingPartyId: "example.com",
-            relyingPartyName: "Example",
             prfSalt: Data("other".utf8),
             hkdfInfo: profile.hkdfInfo
         )
@@ -83,16 +85,15 @@ final class PasskeyKeyManagerTests: XCTestCase {
         let otherProfile = try PasskeyKeyProfile(
             version: 1,
             relyingPartyId: profile.relyingPartyId,
-            relyingPartyName: profile.relyingPartyName,
             prfSalt: profile.prfSalt,
             hkdfInfo: Data("other".utf8)
         )
         let other = try PasskeyKeyManager(
             profile: otherProfile,
+            relyingPartyName: "Example",
             storage: storage,
             timeout: 1,
-            ceremonyDriver: TestCeremonyDriver(),
-            ceremonyMode: .interactive
+            ceremonyDriver: TestCeremonyDriver()
         )
         XCTAssertNil(try other.rewrapKeyFromCache(key: key))
     }
@@ -181,24 +182,55 @@ final class PasskeyKeyManagerTests: XCTestCase {
                 isPlatformAuthenticator: false
             )))
         ])
-        let manager = try makeManager(
-            driver: driver,
-            ceremonyMode: .immediatelyAvailable
-        )
+        let manager = try makeManager(driver: driver)
         let first = fixtureWrappedKey(credentialId: "AQ", prfOutput: Data(count: 32))
         let second = fixtureWrappedKey(credentialId: "Ag", prfOutput: Data(count: 32))
 
         _ = try await manager.recoverKey(
             wrappedKeys: [first, second],
-            preferredCredentialId: "Ag"
+            preferredCredentialId: "Ag",
+            interaction: .immediatelyAvailable
         )
 
-        guard case .recover(_, let ids, let mode) = try XCTUnwrap(driver.requests.first) else {
+        guard case .recover(_, let ids, let interaction) = try XCTUnwrap(
+            driver.requests.first
+        ) else {
             return XCTFail("Expected recovery request")
         }
         XCTAssertEqual(ids, ["Ag", "AQ"])
-        guard case .immediatelyAvailable = mode else {
+        guard case .immediatelyAvailable = interaction else {
             return XCTFail("Expected immediate mode")
+        }
+    }
+
+    func testEvaluateCredentialReturnsDefensivePRFOutput() async throws {
+        let storage = MemoryPasskeyKeyStorage()
+        let source = Data(repeating: 7, count: 32)
+        let driver = TestCeremonyDriver(behaviors: [
+            .immediate(.success(result(prfOutput: source)))
+        ])
+        let manager = try makeManager(
+            driver: driver,
+            storage: storage
+        )
+
+        let evaluated = try await manager.evaluateCredential(
+            credentialIds: ["AQID"],
+            interaction: .immediatelyAvailable
+        )
+        var exposed = evaluated.prfResult.output
+        exposed[0] = 0
+
+        XCTAssertEqual(evaluated.credentialId, "AQID")
+        XCTAssertEqual(source[0], 7)
+        XCTAssertEqual(try storage.loadCachedPRFResult()?.prfOutput[0], 7)
+        guard case .recover(_, _, let interaction) = try XCTUnwrap(
+            driver.requests.first
+        ) else {
+            return XCTFail("Expected evaluation request")
+        }
+        guard case .immediatelyAvailable = interaction else {
+            return XCTFail("Expected immediate evaluation")
         }
     }
 
@@ -307,16 +339,15 @@ final class PasskeyKeyManagerTests: XCTestCase {
 
     private func makeManager(
         driver: TestCeremonyDriver,
-        ceremonyMode: CeremonyMode = .interactive,
         timeout: TimeInterval = 1,
         storage: (any PasskeyKeyStorage)? = nil
     ) throws -> PasskeyKeyManager {
         try PasskeyKeyManager(
             profile: profile,
+            relyingPartyName: "Example",
             storage: storage,
             timeout: timeout,
-            ceremonyDriver: driver,
-            ceremonyMode: ceremonyMode
+            ceremonyDriver: driver
         )
     }
 

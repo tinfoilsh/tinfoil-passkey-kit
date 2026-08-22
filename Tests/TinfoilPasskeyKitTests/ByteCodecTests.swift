@@ -20,7 +20,7 @@ final class ByteCodecTests: XCTestCase {
                 }
             }
         }
-        for value in ["", "a", "AQ==", "!"] {
+        for value in ["", "a", "AB", "AQ==", "!"] {
             XCTAssertThrowsError(try ByteCodec.base64URLDecode(value))
         }
     }

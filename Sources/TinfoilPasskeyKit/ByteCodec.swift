@@ -25,7 +25,9 @@ enum ByteCodec {
         if remainder > 0 {
             base64 += String(repeating: "=", count: base64QuantumCharacterCount - remainder)
         }
-        guard let data = Data(base64Encoded: base64), !data.isEmpty else {
+        guard let data = Data(base64Encoded: base64),
+              !data.isEmpty,
+              base64URLEncode(data) == string else {
             throw PasskeyKeyError.invalidInput(diagnostic: "credential ID must be unpadded base64url")
         }
         return data

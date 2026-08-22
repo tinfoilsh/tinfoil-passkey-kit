@@ -15,41 +15,47 @@ public final class PasskeyKeyManager {
     }
 
     private let profile: PasskeyKeyProfile
+    private let relyingPartyName: String
     private let storage: (any PasskeyKeyStorage)?
     private let timeout: TimeInterval
     private let ceremonyDriver: any CeremonyDriving
-    private let ceremonyMode: CeremonyMode
     private var activeCeremony: ActiveCeremony?
 
     public convenience init(
         profile: PasskeyKeyProfile,
+        relyingPartyName: String,
         storage: (any PasskeyKeyStorage)? = nil,
         timeout: TimeInterval = 60
     ) throws {
         try self.init(
             profile: profile,
+            relyingPartyName: relyingPartyName,
             storage: storage,
             timeout: timeout,
-            ceremonyDriver: ApplePasskeyCeremonyDriver(),
-            ceremonyMode: .interactive
+            ceremonyDriver: ApplePasskeyCeremonyDriver()
         )
     }
 
     init(
         profile: PasskeyKeyProfile,
+        relyingPartyName: String,
         storage: (any PasskeyKeyStorage)?,
         timeout: TimeInterval,
-        ceremonyDriver: any CeremonyDriving,
-        ceremonyMode: CeremonyMode
+        ceremonyDriver: any CeremonyDriving
     ) throws {
         guard timeout.isFinite, timeout > 0 else {
             throw PasskeyKeyError.invalidInput(diagnostic: "timeout must be positive and finite")
         }
+        guard !relyingPartyName.isEmpty else {
+            throw PasskeyKeyError.invalidInput(
+                diagnostic: "relying-party name must not be empty"
+            )
+        }
         self.profile = profile
+        self.relyingPartyName = relyingPartyName
         self.storage = storage
         self.timeout = timeout
         self.ceremonyDriver = ceremonyDriver
-        self.ceremonyMode = ceremonyMode
     }
 
     public func capability(operation: PasskeyOperation) async -> PasskeyCapability {
@@ -62,8 +68,8 @@ public final class PasskeyKeyManager {
         let result = try await runCeremony(
             request: .create(
                 profile: profile,
-                user: user,
-                mode: ceremonyMode
+                relyingPartyName: relyingPartyName,
+                user: user
             )
         )
         recordSuccessfulCeremony(result)
@@ -78,20 +84,15 @@ public final class PasskeyKeyManager {
 
     public func recoverKey(
         wrappedKeys: [WrappedKey],
-        preferredCredentialId: String? = nil
+        preferredCredentialId: String? = nil,
+        interaction: PasskeyInteraction = .interactive
     ) async throws -> RecoveredKey {
         try validate(wrappedKeys: wrappedKeys)
-        let result = try await runCeremony(
-            request: .recover(
-                profile: profile,
-                credentialIds: orderedCredentialIds(
-                    wrappedKeys: wrappedKeys,
-                    preferredCredentialId: preferredCredentialId
-                ),
-                mode: ceremonyMode
-            )
+        let result = try await evaluateCredentialResult(
+            credentialIds: wrappedKeys.map(\.credentialId),
+            preferredCredentialId: preferredCredentialId,
+            interaction: interaction
         )
-        recordSuccessfulCeremony(result)
         guard let wrapped = wrappedKeys.first(where: {
             $0.credentialId == result.credentialId
         }) else {
@@ -105,6 +106,22 @@ public final class PasskeyKeyManager {
             wrapped: wrapped
         )
         return RecoveredKey(credentialId: result.credentialId, key: key)
+    }
+
+    public func evaluateCredential(
+        credentialIds: [String],
+        preferredCredentialId: String? = nil,
+        interaction: PasskeyInteraction = .interactive
+    ) async throws -> EvaluatedCredential {
+        let result = try await evaluateCredentialResult(
+            credentialIds: credentialIds,
+            preferredCredentialId: preferredCredentialId,
+            interaction: interaction
+        )
+        return EvaluatedCredential(
+            credentialId: result.credentialId,
+            prfResult: PRFResult(output: copy(result.prfOutput))
+        )
     }
 
     public func recoverKeyFromCache(
@@ -273,17 +290,48 @@ public final class PasskeyKeyManager {
         }
     }
 
+    private func evaluateCredentialResult(
+        credentialIds: [String],
+        preferredCredentialId: String?,
+        interaction: PasskeyInteraction
+    ) async throws -> CeremonyResult {
+        let result = try await runCeremony(
+            request: .recover(
+                profile: profile,
+                credentialIds: try orderedCredentialIds(
+                    credentialIds: credentialIds,
+                    preferredCredentialId: preferredCredentialId
+                ),
+                interaction: interaction
+            )
+        )
+        recordSuccessfulCeremony(result)
+        return result
+    }
+
     private func orderedCredentialIds(
-        wrappedKeys: [WrappedKey],
+        credentialIds: [String],
         preferredCredentialId: String?
-    ) -> [String] {
+    ) throws -> [String] {
+        guard !credentialIds.isEmpty else {
+            throw PasskeyKeyError.invalidInput(
+                diagnostic: "at least one credential ID is required"
+            )
+        }
         var seen = Set<String>()
-        let credentialIds = wrappedKeys.map(\.credentialId).filter { seen.insert($0).inserted }
+        let credentialIds = credentialIds.filter { seen.insert($0).inserted }
+        for credentialId in credentialIds {
+            _ = try ByteCodec.base64URLDecode(credentialId)
+        }
         let preferred = preferredCredentialId ?? loadLocalCredentialId()
         guard let preferred, credentialIds.contains(preferred) else {
             return credentialIds
         }
         return [preferred] + credentialIds.filter { $0 != preferred }
+    }
+
+    private func copy(_ data: Data) -> Data {
+        data.withUnsafeBytes { Data($0) }
     }
 
     private func recordSuccessfulCeremony(_ result: CeremonyResult) {

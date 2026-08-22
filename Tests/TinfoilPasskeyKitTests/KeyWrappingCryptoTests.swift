@@ -6,7 +6,6 @@ final class KeyWrappingCryptoTests: XCTestCase {
     private let profile = try! PasskeyKeyProfile(
         version: 1,
         relyingPartyId: "example.com",
-        relyingPartyName: "Example",
         prfSalt: Data("tinfoil-chat-key-encryption".utf8),
         hkdfInfo: Data("tinfoil-chat-kek-v1".utf8)
     )
@@ -35,7 +34,6 @@ final class KeyWrappingCryptoTests: XCTestCase {
         let fixtureProfile = try PasskeyKeyProfile(
             version: 1,
             relyingPartyId: "example.com",
-            relyingPartyName: "Example",
             prfSalt: Data("test-prf".utf8),
             hkdfInfo: Data("test-kek".utf8)
         )
