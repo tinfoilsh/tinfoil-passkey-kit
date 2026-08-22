@@ -6,6 +6,8 @@ import XCTest
 final class PasskeyModelsTests: XCTestCase {
     func testProfileValidatesEveryField() {
         XCTAssertThrowsError(try profile(version: 0))
+        XCTAssertThrowsError(try profile(version: 9_007_199_254_740_992))
+        XCTAssertNoThrow(try profile(version: 9_007_199_254_740_991))
         XCTAssertThrowsError(try profile(relyingPartyId: ""))
         XCTAssertThrowsError(try profile(relyingPartyName: ""))
         XCTAssertThrowsError(try profile(prfSalt: Data()))
@@ -38,7 +40,7 @@ final class PasskeyModelsTests: XCTestCase {
         let value = try profile()
         for timeout in [0, -1, .infinity, .nan] {
             XCTAssertThrowsError(
-                try PasskeyKeyManagerConfiguration(profile: value, timeout: timeout)
+                try PasskeyKeyManager(profile: value, timeout: timeout)
             )
         }
     }

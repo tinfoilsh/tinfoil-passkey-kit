@@ -14,24 +14,46 @@ public final class PasskeyKeyManager {
         }
     }
 
-    private let configuration: PasskeyKeyManagerConfiguration
+    private let profile: PasskeyKeyProfile
+    private let storage: (any PasskeyKeyStorage)?
+    private let timeout: TimeInterval
+    private let logger: PasskeyKeyLogger?
     private let ceremonyDriver: any CeremonyDriving
     private let ceremonyMode: CeremonyMode
     private var activeCeremony: ActiveCeremony?
     private(set) var storageDiagnostic: Error?
 
-    public init(configuration: PasskeyKeyManagerConfiguration) {
-        self.configuration = configuration
-        self.ceremonyDriver = ApplePasskeyCeremonyDriver()
-        self.ceremonyMode = .interactive
+    public convenience init(
+        profile: PasskeyKeyProfile,
+        storage: (any PasskeyKeyStorage)? = nil,
+        timeout: TimeInterval = 60,
+        logger: PasskeyKeyLogger? = nil
+    ) throws {
+        try self.init(
+            profile: profile,
+            storage: storage,
+            timeout: timeout,
+            logger: logger,
+            ceremonyDriver: ApplePasskeyCeremonyDriver(),
+            ceremonyMode: .interactive
+        )
     }
 
     init(
-        configuration: PasskeyKeyManagerConfiguration,
+        profile: PasskeyKeyProfile,
+        storage: (any PasskeyKeyStorage)?,
+        timeout: TimeInterval,
+        logger: PasskeyKeyLogger?,
         ceremonyDriver: any CeremonyDriving,
-        ceremonyMode: CeremonyMode = .interactive
-    ) {
-        self.configuration = configuration
+        ceremonyMode: CeremonyMode
+    ) throws {
+        guard timeout.isFinite, timeout > 0 else {
+            throw PasskeyKeyError.invalidInput(diagnostic: "timeout must be positive and finite")
+        }
+        self.profile = profile
+        self.storage = storage
+        self.timeout = timeout
+        self.logger = logger
         self.ceremonyDriver = ceremonyDriver
         self.ceremonyMode = ceremonyMode
     }
@@ -45,18 +67,18 @@ public final class PasskeyKeyManager {
         try KeyWrappingCrypto.validateKey(key)
         let result = try await runCeremony(
             request: .create(
-                profile: configuration.profile,
+                profile: profile,
                 user: user,
                 mode: ceremonyMode
             )
         )
+        recordSuccessfulCeremony(result)
         let wrapped = try KeyWrappingCrypto.wrap(
-            profile: configuration.profile,
+            profile: profile,
             credentialId: result.credentialId,
             prfOutput: result.prfOutput,
             key: key
         )
-        recordSuccessfulCeremony(result)
         return CreatedWrappedKey(credentialId: result.credentialId, wrappedKey: wrapped)
     }
 
@@ -67,7 +89,7 @@ public final class PasskeyKeyManager {
         try validate(wrappedKeys: wrappedKeys)
         let result = try await runCeremony(
             request: .recover(
-                profile: configuration.profile,
+                profile: profile,
                 credentialIds: orderedCredentialIds(
                     wrappedKeys: wrappedKeys,
                     preferredCredentialId: preferredCredentialId
@@ -75,6 +97,7 @@ public final class PasskeyKeyManager {
                 mode: ceremonyMode
             )
         )
+        recordSuccessfulCeremony(result)
         guard let wrapped = wrappedKeys.first(where: {
             $0.credentialId == result.credentialId
         }) else {
@@ -83,11 +106,10 @@ public final class PasskeyKeyManager {
             )
         }
         let key = try KeyWrappingCrypto.unwrap(
-            profile: configuration.profile,
+            profile: profile,
             prfOutput: result.prfOutput,
             wrapped: wrapped
         )
-        recordSuccessfulCeremony(result)
         return RecoveredKey(credentialId: result.credentialId, key: key)
     }
 
@@ -106,7 +128,7 @@ public final class PasskeyKeyManager {
             return RecoveredKey(
                 credentialId: cached.credentialId,
                 key: try KeyWrappingCrypto.unwrap(
-                    profile: configuration.profile,
+                    profile: profile,
                     prfOutput: cached.prfOutput,
                     wrapped: wrapped
                 )
@@ -120,7 +142,7 @@ public final class PasskeyKeyManager {
         try KeyWrappingCrypto.validateKey(key)
         guard let cached = loadCachedResult() else { return nil }
         return try KeyWrappingCrypto.wrap(
-            profile: configuration.profile,
+            profile: profile,
             credentialId: cached.credentialId,
             prfOutput: cached.prfOutput,
             key: key
@@ -129,9 +151,9 @@ public final class PasskeyKeyManager {
 
     public func clearLocalState() {
         do {
-            try configuration.storage?.clear()
+            try storage?.clear()
         } catch {
-            storageDiagnostic = error
+            recordStorageDiagnostic(error)
         }
     }
 
@@ -161,7 +183,7 @@ public final class PasskeyKeyManager {
                         return
                     }
                     active.controller = controller
-                    let timeout = configuration.timeout
+                    let timeout = self.timeout
                     active.timeoutTask = Task { [weak self] in
                         do {
                             try await Task.sleep(for: .seconds(timeout))
@@ -254,7 +276,7 @@ public final class PasskeyKeyManager {
         for wrapped in wrappedKeys {
             try KeyWrappingCrypto.validateWrappedKey(
                 wrapped,
-                profile: configuration.profile
+                profile: profile
             )
         }
     }
@@ -274,46 +296,51 @@ public final class PasskeyKeyManager {
 
     private func recordSuccessfulCeremony(_ result: CeremonyResult) {
         do {
-            try configuration.storage?.saveCachedPRFResult(
+            try storage?.saveCachedPRFResult(
                 CachedPRFResult(
-                    profile: configuration.profile,
+                    profile: profile,
                     credentialId: result.credentialId,
                     prfOutput: result.prfOutput
                 )
             )
         } catch {
-            storageDiagnostic = error
+            recordStorageDiagnostic(error)
         }
         if result.isPlatformAuthenticator {
             do {
-                try configuration.storage?.saveLocalCredentialId(result.credentialId)
+                try storage?.saveLocalCredentialId(result.credentialId)
             } catch {
-                storageDiagnostic = error
+                recordStorageDiagnostic(error)
             }
         }
     }
 
     private func loadCachedResult() -> CachedPRFResult? {
         do {
-            guard let result = try configuration.storage?.loadCachedPRFResult(),
-                  result.profile == configuration.profile,
+            guard let result = try storage?.loadCachedPRFResult(),
+                  result.profile == profile,
                   result.prfOutput.count == KeyWrappingCrypto.prfOutputByteCount,
                   (try? ByteCodec.base64URLDecode(result.credentialId)) != nil else {
                 return nil
             }
             return result
         } catch {
-            storageDiagnostic = error
+            recordStorageDiagnostic(error)
             return nil
         }
     }
 
     private func loadLocalCredentialId() -> String? {
         do {
-            return try configuration.storage?.loadLocalCredentialId()
+            return try storage?.loadLocalCredentialId()
         } catch {
-            storageDiagnostic = error
+            recordStorageDiagnostic(error)
             return nil
         }
+    }
+
+    private func recordStorageDiagnostic(_ error: Error) {
+        storageDiagnostic = error
+        logger?(error)
     }
 }

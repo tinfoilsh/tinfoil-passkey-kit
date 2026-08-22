@@ -1,6 +1,8 @@
 import Foundation
 
 public struct PasskeyKeyProfile: Codable, Equatable, Sendable {
+    private static let maximumInteroperableVersion = 9_007_199_254_740_991
+
     private enum CodingKeys: String, CodingKey, CaseIterable {
         case version
         case relyingPartyId
@@ -22,8 +24,10 @@ public struct PasskeyKeyProfile: Codable, Equatable, Sendable {
         prfSalt: Data,
         hkdfInfo: Data
     ) throws {
-        guard version > 0 else {
-            throw PasskeyKeyError.invalidInput(diagnostic: "profile version must be positive")
+        guard version > 0, version <= Self.maximumInteroperableVersion else {
+            throw PasskeyKeyError.invalidInput(
+                diagnostic: "profile version must be a positive JavaScript safe integer"
+            )
         }
         guard !relyingPartyId.isEmpty else {
             throw PasskeyKeyError.invalidInput(diagnostic: "relying-party ID must not be empty")
@@ -62,6 +66,8 @@ public struct PasskeyKeyProfile: Codable, Equatable, Sendable {
         )
     }
 }
+
+public typealias PasskeyKeyLogger = @MainActor (_ error: Error) -> Void
 
 private struct ProfileCodingKey: CodingKey {
     let stringValue: String
@@ -178,25 +184,5 @@ extension PasskeyKeyError: LocalizedError {
         case .operationFailed(let diagnostic, _):
             return diagnostic ?? "The passkey operation failed"
         }
-    }
-}
-
-@MainActor
-public struct PasskeyKeyManagerConfiguration {
-    public let profile: PasskeyKeyProfile
-    public let timeout: TimeInterval
-    public let storage: (any PasskeyKeyStorage)?
-
-    public init(
-        profile: PasskeyKeyProfile,
-        timeout: TimeInterval = 60,
-        storage: (any PasskeyKeyStorage)? = nil
-    ) throws {
-        guard timeout.isFinite, timeout > 0 else {
-            throw PasskeyKeyError.invalidInput(diagnostic: "timeout must be positive and finite")
-        }
-        self.profile = profile
-        self.timeout = timeout
-        self.storage = storage
     }
 }

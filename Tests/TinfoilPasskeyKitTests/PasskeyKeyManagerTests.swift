@@ -87,13 +87,13 @@ final class PasskeyKeyManagerTests: XCTestCase {
             prfSalt: profile.prfSalt,
             hkdfInfo: Data("other".utf8)
         )
-        let otherConfiguration = try PasskeyKeyManagerConfiguration(
+        let other = try PasskeyKeyManager(
             profile: otherProfile,
-            storage: storage
-        )
-        let other = PasskeyKeyManager(
-            configuration: otherConfiguration,
-            ceremonyDriver: TestCeremonyDriver()
+            storage: storage,
+            timeout: 1,
+            logger: nil,
+            ceremonyDriver: TestCeremonyDriver(),
+            ceremonyMode: .interactive
         )
         XCTAssertNil(try other.rewrapKeyFromCache(key: key))
     }
@@ -132,18 +132,46 @@ final class PasskeyKeyManagerTests: XCTestCase {
 
     func testStorageFailuresDoNotDiscardSuccessAndRetainDiagnostics() async throws {
         let storage = FailingStorage()
+        var diagnostics: [Error] = []
         let manager = try makeManager(
             driver: TestCeremonyDriver(behaviors: [.immediate(.success(result()))]),
-            storage: storage
+            storage: storage,
+            logger: { diagnostics.append($0) }
         )
 
         let created = try await manager.createAndWrapKey(user: user, key: key)
         XCTAssertEqual(created.credentialId, "AQID")
         XCTAssertNotNil(manager.storageDiagnostic)
+        XCTAssertFalse(diagnostics.isEmpty)
         XCTAssertNil(try manager.recoverKeyFromCache(wrappedKeys: [created.wrappedKey]))
         XCTAssertNil(try manager.rewrapKeyFromCache(key: key))
         manager.clearLocalState()
         XCTAssertNotNil(manager.storageDiagnostic)
+    }
+
+    func testRecoveryCachesSuccessfulCeremonyBeforeDecryption() async throws {
+        let storage = MemoryPasskeyKeyStorage()
+        let ceremonyResult = result(prfOutput: Data(repeating: 9, count: 32))
+        let manager = try makeManager(
+            driver: TestCeremonyDriver(behaviors: [.immediate(.success(ceremonyResult))]),
+            storage: storage
+        )
+        let wrapped = fixtureWrappedKey(
+            credentialId: ceremonyResult.credentialId,
+            prfOutput: Data(repeating: 3, count: 32)
+        )
+
+        do {
+            _ = try await manager.recoverKey(wrappedKeys: [wrapped])
+            XCTFail("Expected authenticated decryption to fail")
+        } catch {
+            guard case PasskeyKeyError.operationFailed = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(try storage.loadCachedPRFResult()?.prfOutput, ceremonyResult.prfOutput)
+        XCTAssertEqual(try storage.loadLocalCredentialId(), ceremonyResult.credentialId)
     }
 
     func testPreferredCredentialAndImmediateModeReachDriver() async throws {
@@ -282,14 +310,14 @@ final class PasskeyKeyManagerTests: XCTestCase {
         driver: TestCeremonyDriver,
         ceremonyMode: CeremonyMode = .interactive,
         timeout: TimeInterval = 1,
-        storage: (any PasskeyKeyStorage)? = nil
+        storage: (any PasskeyKeyStorage)? = nil,
+        logger: PasskeyKeyLogger? = nil
     ) throws -> PasskeyKeyManager {
-        PasskeyKeyManager(
-            configuration: try PasskeyKeyManagerConfiguration(
-                profile: profile,
-                timeout: timeout,
-                storage: storage
-            ),
+        try PasskeyKeyManager(
+            profile: profile,
+            storage: storage,
+            timeout: timeout,
+            logger: logger,
             ceremonyDriver: driver,
             ceremonyMode: ceremonyMode
         )
