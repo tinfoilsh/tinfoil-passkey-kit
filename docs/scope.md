@@ -11,8 +11,9 @@ and AES-GCM wrapping needed for that flow.
 - One required profile bound when each key manager is created; operations do
   not accept per-call profiles.
 - Operation-specific capability reporting for enrollment and recovery.
-- Passkey creation and assertion ceremonies; recovery permits non-platform
-  credentials.
+- Passkey creation and assertion ceremonies. Browsers may recover with
+  non-platform credentials. Apple supports platform, synced, and cross-device
+  passkeys, but not security-key PRF.
 - Interactive assertions on web and Apple; immediately-available assertions on
   Apple only.
 - Advanced credential evaluation and explicit-PRF wrap/unwrap primitives for

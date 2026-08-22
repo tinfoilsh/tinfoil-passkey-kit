@@ -58,19 +58,25 @@ shown key order and no insignificant whitespace. `decodeWrappedKeyRecord`
 accepts insignificant whitespace and any key order, but rejects missing or
 additional fields, invalid encodings, and unsupported versions. Record and
 profile versions must both be `1`. Swift exposes methods with the same names.
+Swift encodes to and decodes from `Data` containing the canonical UTF-8 JSON.
 
 ## Manager
 
 JavaScript constructs a manager with exactly one required profile. Swift uses
-`PasskeyKeyManager(profile:relyingPartyName:storage:)` with the same requirement.
-The relying-party name is required ceremony presentation configuration, not
-part of the cryptographic profile. Storage remains optional in both languages.
+`PasskeyKeyManager(profile:relyingPartyName:storage:presentationAnchorProvider:timeout:)`
+with the same requirement. The relying-party name is required for API parity
+but is not part of the cryptographic profile. AuthenticationServices does not
+expose a relying-party display-name field, so Apple derives its presentation
+from system and associated-domain metadata. Storage remains optional, the Apple
+presentation anchor provider is required, and timeout defaults to 60 seconds.
+Omitting it is a compile-time error rather than a ceremony-time failure.
 
 ```ts
 declare function createPasskeyKeyManager(input: {
   profile: PasskeyKeyProfile;
   relyingPartyName: string;
   storage?: PasskeyKeyStorage;
+  timeoutMs?: number;
 }): PasskeyKeyManager;
 ```
 
@@ -221,9 +227,16 @@ cannot answer without a ceremony. Applications should permit an attempt for
 The single `capability({ operation })` API distinguishes the requirements.
 `enroll` checks whether a PRF-capable platform authenticator can create a
 credential. `recover` checks whether a PRF assertion can be attempted and does
-not require platform attachment; a synced, cross-device, or security-key
-credential may recover a key. The manager profile is implicit and cannot be
-supplied to the capability call.
+not require platform attachment. Browsers may use synced, security-key, or
+hybrid credentials when their WebAuthn implementation and authenticator support
+PRF. The manager profile is implicit and cannot be supplied to the capability
+call.
+
+On iOS 18 and macOS 15, Apple recovery supports platform and synced passkeys,
+including cross-device passkey flows. Explicit security-key PRF is not currently
+enabled in the Apple target because the baseline toolchain does not provide that
+API. Apple also does not provide a reliable PRF preflight for the supported
+flows, so Swift reports `unknown` rather than falsely reporting `unsupported`.
 
 Assertion interaction support is:
 
@@ -291,4 +304,15 @@ insecure because same-origin script can read its cached PRF output; the Keychain
 adapter uses device-local protected storage. Neither is selected by default:
 the host must opt in by passing an adapter.
 
+Swift storage calls run synchronously on the manager's main-actor methods.
+Keychain access may block that actor. Hosts whose persistence must run off the
+main actor should avoid the v0.2 adapter and use a future asynchronous storage
+API rather than treating this synchronous contract as background I/O.
+
 The generic public contract does not expose `deriveStableKeyId`.
+
+Swift also provides the opt-in `KeychainPasskeyKeyStorage` adapter. It uses
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`, so cached PRF output is
+device-bound and unavailable while locked. The cache still permits recovery
+without another passkey prompt once readable; hosts must decide whether that
+tradeoff fits their threat model. No storage adapter is enabled by default.
