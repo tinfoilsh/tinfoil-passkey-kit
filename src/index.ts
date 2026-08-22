@@ -1,33 +1,18 @@
-export {
-  deriveStableKeyId,
-  deriveWrappingKey,
-  generateKeyMaterial,
-  unwrapKey,
-  wrapKey,
-} from "./crypto.js";
 export { PasskeyKeyError } from "./errors.js";
-export type { PasskeyKeyErrorCode } from "./errors.js";
+export type { PasskeyKeyErrorCategory } from "./errors.js";
 export { createPasskeyKeyManager } from "./kit.js";
-export {
-  createInsecureBrowserLocalStorageSecretStore,
-  createMemoryCredentialStore,
-  createMemorySecretStore,
-} from "./storage.js";
+export { createMemoryPasskeyKeyStorage } from "./storage.js";
+export type { CachedPRFResult, PasskeyKeyStorage } from "./storage.js";
 export type {
-  CredentialMetadata,
-  CredentialStore,
-  SecretStore,
-  StoreKey,
-} from "./storage.js";
-export type {
-  CeremonyOptions,
-  EnrolledKey,
+  CreateAndWrapKeyInput,
+  CreatedWrappedKey,
+  PasskeyCapability,
   PasskeyKeyManager,
   PasskeyKeyManagerConfig,
   PasskeyKeyProfile,
   PasskeyUser,
-  PrfResult,
-  UnlockedKey,
-  UnlockOptions,
+  RecoveredKey,
+  RecoverKeyInput,
+  RewrapKeyInput,
   WrappedKey,
 } from "./types.js";

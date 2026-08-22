@@ -1,37 +1,37 @@
-export type PasskeyKeyErrorCode =
-  | "cancelledOrUnavailable"
+export type PasskeyKeyErrorCategory =
+  | "unsupported"
+  | "cancelled"
   | "timeout"
-  | "prfUnsupported"
-  | "operationInProgress"
-  | "invalidInput"
-  | "cryptoFailure";
+  | "operation_in_progress"
+  | "invalid_input"
+  | "operation_failed";
 
 export class PasskeyKeyError extends Error {
-  readonly code: PasskeyKeyErrorCode;
+  readonly category: PasskeyKeyErrorCategory;
   readonly operation?: string;
   readonly cause?: unknown;
 
   constructor(
-    code: PasskeyKeyErrorCode,
+    category: PasskeyKeyErrorCategory,
     message: string,
     options: { cause?: unknown; operation?: string } = {},
   ) {
     super(message);
     this.name = "PasskeyKeyError";
-    this.code = code;
+    this.category = category;
     this.operation = options.operation;
     this.cause = options.cause;
   }
 }
 
 export function invalidInput(message: string, operation?: string): PasskeyKeyError {
-  return new PasskeyKeyError("invalidInput", message, { operation });
+  return new PasskeyKeyError("invalid_input", message, { operation });
 }
 
-export function cryptoFailure(
+export function operationFailed(
   message: string,
   cause: unknown,
   operation?: string,
 ): PasskeyKeyError {
-  return new PasskeyKeyError("cryptoFailure", message, { cause, operation });
+  return new PasskeyKeyError("operation_failed", message, { cause, operation });
 }

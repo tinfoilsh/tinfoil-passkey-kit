@@ -1,21 +1,19 @@
 import {
   copyAndValidateProfile,
-  copyProfile,
-  deriveWrappingKey,
-  generateKeyMaterial,
   unwrapKey,
+  validateKey,
   validateWrappedKey,
   wrapKey,
 } from "./crypto.js";
 import { invalidInput, PasskeyKeyError } from "./errors.js";
-import { canAttemptPasskeyUnlock, canEnrollPlatformPasskey } from "./support.js";
-import type { StoreKey } from "./storage.js";
+import { capability as detectCapability } from "./support.js";
+import type { CachedPRFResult } from "./storage.js";
 import type {
+  CreateAndWrapKeyInput,
   PasskeyKeyManager,
   PasskeyKeyManagerConfig,
   PasskeyUser,
-  PrfResult,
-  UnlockOptions,
+  RecoverKeyInput,
   WrappedKey,
 } from "./types.js";
 import {
@@ -27,279 +25,297 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 60_000;
 
-function validateConfig(config: PasskeyKeyManagerConfig): void {
+interface ActiveCeremony {
+  token: symbol;
+  operation: string;
+  cancel(error: PasskeyKeyError): void;
+}
+
+function mapCeremonyError(error: unknown, operation: string): PasskeyKeyError {
+  if (error instanceof PasskeyKeyError) {
+    if (error.operation) return error;
+    return new PasskeyKeyError(error.category, error.message, {
+      cause: error.cause,
+      operation,
+    });
+  }
+  if (error instanceof DOMException && error.name === "NotAllowedError") {
+    return new PasskeyKeyError(
+      "cancelled",
+      "the prompt was dismissed or no eligible credential was available",
+      { cause: error, operation },
+    );
+  }
+  if (error instanceof DOMException && error.name === "AbortError") {
+    return new PasskeyKeyError("cancelled", "the passkey operation was cancelled", {
+      cause: error,
+      operation,
+    });
+  }
+  return new PasskeyKeyError("operation_failed", "the passkey operation failed", {
+    cause: error,
+    operation,
+  });
+}
+
+function context(profile: PasskeyKeyProfileSnapshot, timeoutMs: number): CeremonyContext {
+  return {
+    rpId: profile.relyingPartyId,
+    rpName: profile.relyingPartyName,
+    prfInput: profile.prfSalt,
+    timeoutMs,
+  };
+}
+
+type PasskeyKeyProfileSnapshot = ReturnType<typeof copyAndValidateProfile>;
+
+function copyUser(user: PasskeyUser): PasskeyUser {
+  if (!user || typeof user !== "object") throw invalidInput("user is required");
+  return {
+    id: user.id instanceof Uint8Array ? user.id.slice() : user.id,
+    name: user.name,
+    displayName: user.displayName,
+  };
+}
+
+function copyWrappedKeys(wrappedKeys: WrappedKey[]): WrappedKey[] {
+  if (!Array.isArray(wrappedKeys) || wrappedKeys.length === 0) {
+    throw invalidInput("at least one wrapped key is required");
+  }
+  return wrappedKeys.map((wrapped) => ({ ...wrapped }));
+}
+
+export function createPasskeyKeyManager(
+  config: PasskeyKeyManagerConfig = {},
+): PasskeyKeyManager {
   if (!config || typeof config !== "object") throw invalidInput("manager config is required");
-  if (typeof config.rpId !== "string" || config.rpId.length === 0) {
-    throw invalidInput("rpId must be a non-empty string");
-  }
-  if (typeof config.rpName !== "string" || config.rpName.length === 0) {
-    throw invalidInput("rpName must be a non-empty string");
-  }
   if (
     config.timeoutMs !== undefined &&
     (!Number.isFinite(config.timeoutMs) || config.timeoutMs <= 0)
   ) {
     throw invalidInput("timeoutMs must be positive and finite");
   }
-}
-
-function publicResult(result: InternalPrfResult): PrfResult {
-  return { credentialId: result.credentialId, prfOutput: result.prfOutput.slice() };
-}
-
-function mapCeremonyError(error: unknown, operation: string): PasskeyKeyError {
-  if (error instanceof PasskeyKeyError) {
-    if (error.operation) return error;
-    return new PasskeyKeyError(error.code, error.message, { cause: error.cause, operation });
-  }
-  if (error instanceof DOMException && error.name === "NotAllowedError") {
-    return new PasskeyKeyError(
-      "cancelledOrUnavailable",
-      "the passkey operation was cancelled or unavailable",
-      { cause: error, operation },
-    );
-  }
-  if (error instanceof DOMException && error.name === "AbortError") {
-    return new PasskeyKeyError("cancelledOrUnavailable", "the passkey operation was aborted", {
-      cause: error,
-      operation,
-    });
-  }
-  return new PasskeyKeyError("cryptoFailure", "the passkey operation failed", {
-    cause: error,
-    operation,
-  });
-}
-
-export function createPasskeyKeyManager(
-  config: PasskeyKeyManagerConfig,
-): PasskeyKeyManager {
-  validateConfig(config);
-  const profile = copyAndValidateProfile(config.profile);
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const namespace = { rpId: config.rpId, profileId: profile.id };
-  const ceremonyContext: CeremonyContext = {
-    rpId: config.rpId,
-    rpName: config.rpName,
-    prfInput: profile.prfInput.slice(),
-    timeoutMs,
-  };
-  let activeOperation: symbol | null = null;
-
-  const storeKey = (credentialId: string): StoreKey => ({ ...namespace, credentialId });
+  let activeCeremony: ActiveCeremony | null = null;
 
   async function runCeremony(
     operation: string,
     callerSignal: AbortSignal | undefined,
     perform: (signal: AbortSignal) => Promise<InternalPrfResult>,
   ): Promise<InternalPrfResult> {
-    if (activeOperation) {
-      throw new PasskeyKeyError("operationInProgress", "another ceremony is in progress", {
-        operation,
-      });
+    if (activeCeremony) {
+      throw new PasskeyKeyError(
+        "operation_in_progress",
+        "another passkey ceremony is in progress",
+        { operation },
+      );
     }
     if (callerSignal?.aborted) {
-      throw new PasskeyKeyError(
-        "cancelledOrUnavailable",
-        "the passkey operation was aborted",
-        { cause: callerSignal.reason, operation },
-      );
+      throw new PasskeyKeyError("cancelled", "the passkey operation was cancelled", {
+        cause: callerSignal.reason,
+        operation,
+      });
     }
 
     const token = Symbol(operation);
     const controller = new AbortController();
-    activeOperation = token;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
     let rejectInterruption: ((error: PasskeyKeyError) => void) | undefined;
     const interrupted = new Promise<InternalPrfResult>((_, reject) => {
       rejectInterruption = reject;
     });
-    const abortFromCaller = () => {
-      rejectInterruption?.(
-        new PasskeyKeyError("cancelledOrUnavailable", "the passkey operation was aborted", {
+    const cancel = (error: PasskeyKeyError) => {
+      rejectInterruption?.(error);
+      controller.abort(error);
+    };
+    activeCeremony = { token, operation, cancel };
+    const cancelFromCaller = () =>
+      cancel(
+        new PasskeyKeyError("cancelled", "the passkey operation was cancelled", {
           cause: callerSignal?.reason,
           operation,
         }),
       );
-      controller.abort(callerSignal?.reason);
-    };
-    callerSignal?.addEventListener("abort", abortFromCaller, { once: true });
-    timeout = setTimeout(() => {
-      rejectInterruption?.(
-        new PasskeyKeyError("timeout", "the passkey operation timed out", { operation }),
-      );
-      controller.abort(new DOMException("Timed out", "TimeoutError"));
-    }, timeoutMs);
+    callerSignal?.addEventListener("abort", cancelFromCaller, { once: true });
+    const timeout = setTimeout(
+      () =>
+        cancel(
+          new PasskeyKeyError("timeout", "the passkey operation timed out", {
+            operation,
+          }),
+        ),
+      timeoutMs,
+    );
 
     try {
       return await Promise.race([perform(controller.signal), interrupted]);
     } catch (error) {
       throw mapCeremonyError(error, operation);
     } finally {
-      if (timeout !== undefined) clearTimeout(timeout);
-      callerSignal?.removeEventListener("abort", abortFromCaller);
-      if (activeOperation === token) activeOperation = null;
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener("abort", cancelFromCaller);
+      if (activeCeremony?.token === token) activeCeremony = null;
     }
   }
 
-  async function record(result: InternalPrfResult): Promise<void> {
-    const key = storeKey(result.credentialId);
-    await Promise.allSettled([
-      config.secretStore?.save(key, result.prfOutput.slice()),
-      config.credentialStore?.save({
-        ...key,
-        isPlatformAuthenticator: result.isPlatformAuthenticator,
-      }),
-    ]);
+  function recordSuccessfulCredential(result: InternalPrfResult): void {
+    try {
+      config.storage?.saveCachedPRFResult({
+        credentialId: result.credentialId,
+        prfOutput: result.prfOutput.slice(),
+      });
+    } catch {
+      // Storage is best-effort and cannot invalidate a successful ceremony.
+    }
+    if (result.isPlatformAuthenticator) {
+      try {
+        config.storage?.saveLocalCredentialId(result.credentialId);
+      } catch {
+        // Storage is best-effort and cannot invalidate a successful ceremony.
+      }
+    }
   }
 
-  async function createCredential(
-    user: PasskeyUser,
-    signal?: AbortSignal,
-  ): Promise<PrfResult> {
-    const result = await runCeremony("createCredential", signal, (internalSignal) =>
-      createPrfCredential(ceremonyContext, user, internalSignal),
-    );
-    await record(result);
-    return publicResult(result);
+  function loadCachedResult(): CachedPRFResult | null {
+    let result: CachedPRFResult | null;
+    try {
+      result = config.storage?.loadCachedPRFResult() ?? null;
+    } catch {
+      return null;
+    }
+    if (
+      !result ||
+      typeof result.credentialId !== "string" ||
+      !/^[A-Za-z0-9_-]+$/.test(result.credentialId) ||
+      result.credentialId.length % 4 === 1 ||
+      !(result.prfOutput instanceof Uint8Array) ||
+      result.prfOutput.length !== 32
+    ) {
+      return null;
+    }
+    return { credentialId: result.credentialId, prfOutput: result.prfOutput.slice() };
+  }
+
+  function loadPreferredCredentialId(): string | null {
+    try {
+      return config.storage?.loadLocalCredentialId() ?? null;
+    } catch {
+      return null;
+    }
   }
 
   function orderedCredentialIds(
-    credentialIds: string[],
+    wrappedKeys: WrappedKey[],
     preferredCredentialId?: string,
   ): string[] {
-    if (!Array.isArray(credentialIds) || credentialIds.length === 0) {
-      throw invalidInput("at least one credentialId is required", "evaluateCredential");
-    }
-    const unique = [...new Set(credentialIds)];
-    for (const credentialId of unique) {
-      if (
-        typeof credentialId !== "string" ||
-        !/^[A-Za-z0-9_-]+$/.test(credentialId) ||
-        credentialId.length % 4 === 1
-      ) {
-        throw invalidInput("credentialId must be unpadded base64url", "evaluateCredential");
-      }
-    }
-    if (!preferredCredentialId || !unique.includes(preferredCredentialId)) return unique;
-    return [preferredCredentialId, ...unique.filter((id) => id !== preferredCredentialId)];
+    const unique = [...new Set(wrappedKeys.map((wrapped) => wrapped.credentialId))];
+    const preferred = preferredCredentialId ?? loadPreferredCredentialId();
+    if (!preferred || !unique.includes(preferred)) return unique;
+    return [preferred, ...unique.filter((credentialId) => credentialId !== preferred)];
   }
 
-  async function evaluateCredential(
-    credentialIds: string[],
-    options: UnlockOptions = {},
-  ): Promise<PrfResult> {
-    const ordered = orderedCredentialIds(credentialIds, options.preferredCredentialId);
-    const result = await runCeremony("evaluateCredential", options.signal, (internalSignal) =>
-      evaluatePrfCredential(ceremonyContext, ordered, internalSignal),
+  async function createAndWrapKey(input: CreateAndWrapKeyInput) {
+    if (!input || typeof input !== "object") throw invalidInput("input is required");
+    const profile = copyAndValidateProfile(input.profile);
+    validateKey(input.key, "createAndWrapKey");
+    const key = input.key.slice();
+    const user = copyUser(input.user);
+    const result = await runCeremony("createAndWrapKey", input.signal, (signal) =>
+      createPrfCredential(context(profile, timeoutMs), user, signal),
     );
-    await record(result);
-    return publicResult(result);
-  }
-
-  async function wrapWithPrfResult(
-    result: PrfResult,
-    keyMaterial: Uint8Array,
-  ): Promise<WrappedKey> {
-    const wrappingKey = await deriveWrappingKey(result.prfOutput, profile);
-    return wrapKey({
+    recordSuccessfulCredential(result);
+    const wrappedKey = await wrapKey(
       profile,
-      credentialId: result.credentialId,
-      wrappingKey,
-      keyMaterial,
-    });
+      result.credentialId,
+      result.prfOutput,
+      key,
+    );
+    return { credentialId: result.credentialId, wrappedKey };
   }
 
-  async function unwrapWithPrfResult(
-    result: PrfResult,
-    wrappedKey: WrappedKey,
-  ): Promise<Uint8Array> {
-    if (result.credentialId !== wrappedKey.credentialId) {
-      throw invalidInput("PRF result credential does not match wrapped key");
-    }
-    const wrappingKey = await deriveWrappingKey(result.prfOutput, profile);
-    return unwrapKey({ profile, wrappingKey, wrappedKey });
+  function prepareRecovery(input: RecoverKeyInput) {
+    if (!input || typeof input !== "object") throw invalidInput("input is required");
+    const profile = copyAndValidateProfile(input.profile);
+    const wrappedKeys = copyWrappedKeys(input.wrappedKeys);
+    for (const wrapped of wrappedKeys) validateWrappedKey(wrapped, profile);
+    return { profile, wrappedKeys };
   }
 
   return {
-    get profile() {
-      return copyProfile(profile);
-    },
-
-    canEnrollPlatformPasskey,
-    canAttemptPasskeyUnlock,
-
-    createCredential(user, options = {}) {
-      return createCredential(user, options.signal);
-    },
-
-    evaluateCredential,
-
-    async enrollKey(input) {
-      const keyMaterial = input.keyMaterial ?? generateKeyMaterial(profile);
-      const result = await createCredential(input.user, input.signal);
-      return { ...result, wrappedKey: await wrapWithPrfResult(result, keyMaterial) };
-    },
-
-    async unlockKey(wrappedKeys, options = {}) {
-      if (!Array.isArray(wrappedKeys) || wrappedKeys.length === 0) {
-        throw invalidInput("at least one wrapped key is required", "unlockKey");
+    async capability(input) {
+      if (
+        !input ||
+        typeof input !== "object" ||
+        (input.operation !== "enroll" && input.operation !== "recover")
+      ) {
+        throw invalidInput("operation must be enroll or recover", "capability");
       }
-      for (const wrappedKey of wrappedKeys) validateWrappedKey(wrappedKey, profile);
-      const result = await evaluateCredential(
-        wrappedKeys.map((wrappedKey) => wrappedKey.credentialId),
-        options,
+      return detectCapability(input.operation);
+    },
+
+    createAndWrapKey,
+
+    async recoverKey(input) {
+      const { profile, wrappedKeys } = prepareRecovery(input);
+      const credentialIds = orderedCredentialIds(
+        wrappedKeys,
+        input.preferredCredentialId,
       );
-      const wrappedKey = wrappedKeys.find(
+      const result = await runCeremony("recoverKey", input.signal, (signal) =>
+        evaluatePrfCredential(context(profile, timeoutMs), credentialIds, signal),
+      );
+      recordSuccessfulCredential(result);
+      const wrapped = wrappedKeys.find(
         (candidate) => candidate.credentialId === result.credentialId,
       );
-      if (!wrappedKey) throw invalidInput("credential has no matching wrapped key", "unlockKey");
+      if (!wrapped) throw invalidInput("credential has no matching wrapped key", "recoverKey");
       return {
         credentialId: result.credentialId,
-        keyMaterial: await unwrapWithPrfResult(result, wrappedKey),
+        key: await unwrapKey(profile, result.prfOutput, wrapped),
       };
     },
 
-    wrapWithPrfResult,
-    unwrapWithPrfResult,
-
-    async unlockKeyFromCache(wrappedKeys) {
-      if (!config.secretStore) return null;
-      for (const wrappedKey of wrappedKeys) {
-        validateWrappedKey(wrappedKey, profile);
-        const secret = await config.secretStore
-          .load(storeKey(wrappedKey.credentialId))
-          .catch(() => null);
-        if (!secret) continue;
-        try {
-          return {
-            credentialId: wrappedKey.credentialId,
-            keyMaterial: await unwrapWithPrfResult(
-              { credentialId: wrappedKey.credentialId, prfOutput: secret },
-              wrappedKey,
-            ),
-          };
-        } catch {
-          continue;
-        }
+    async recoverKeyFromCache(input) {
+      const { profile, wrappedKeys } = prepareRecovery(input);
+      const cached = loadCachedResult();
+      if (!cached) return null;
+      const wrapped = wrappedKeys.find(
+        (candidate) => candidate.credentialId === cached.credentialId,
+      );
+      if (!wrapped) return null;
+      try {
+        return {
+          credentialId: cached.credentialId,
+          key: await unwrapKey(profile, cached.prfOutput, wrapped),
+        };
+      } catch {
+        return null;
       }
-      return null;
     },
 
-    async rewrapKeyFromCache(keyMaterial) {
-      if (!config.secretStore) return null;
-      const [credentialId] = await config.secretStore.list(namespace).catch(() => []);
-      if (!credentialId) return null;
-      const secret = await config.secretStore.load(storeKey(credentialId)).catch(() => null);
-      if (!secret) return null;
-      return wrapWithPrfResult({ credentialId, prfOutput: secret }, keyMaterial);
+    async rewrapKeyFromCache(input) {
+      if (!input || typeof input !== "object") throw invalidInput("input is required");
+      const profile = copyAndValidateProfile(input.profile);
+      validateKey(input.key, "rewrapKeyFromCache");
+      const cached = loadCachedResult();
+      if (!cached) return null;
+      return wrapKey(profile, cached.credentialId, cached.prfOutput, input.key.slice());
     },
 
-    async clearLocalState() {
-      await Promise.allSettled([
-        config.secretStore?.clear(namespace),
-        config.credentialStore?.clear(namespace),
-      ]);
+    clearLocalState() {
+      try {
+        config.storage?.clear();
+      } catch {
+        // Storage is best-effort.
+      }
+    },
+
+    cancelActiveCeremony() {
+      const operation = activeCeremony?.operation;
+      activeCeremony?.cancel(
+        new PasskeyKeyError("cancelled", "the passkey operation was cancelled", {
+          operation,
+        }),
+      );
     },
   };
 }

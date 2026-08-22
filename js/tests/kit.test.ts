@@ -1,18 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { bufferSourceToArrayBuffer, bytesToBase64Url } from "../../src/codec.js";
 import { createPasskeyKeyManager } from "../../src/kit.js";
-import { createMemorySecretStore } from "../../src/storage.js";
-import type { PasskeyKeyProfile } from "../../src/types.js";
+import { createMemoryPasskeyKeyStorage } from "../../src/storage.js";
+import type { PasskeyKeyProfile, WrappedKey } from "../../src/types.js";
 
 const originalCredentials = navigator.credentials;
 const encoder = new TextEncoder();
 const profile: PasskeyKeyProfile = {
   id: "test-v1",
-  prfInput: encoder.encode("test-prf"),
-  hkdfSalt: new Uint8Array(),
+  version: 1,
+  relyingPartyId: "example.com",
+  relyingPartyName: "Example",
+  prfSalt: encoder.encode("test-prf"),
   hkdfInfo: encoder.encode("test-kek"),
-  keyLengthBytes: 32,
 };
+const user = { id: new Uint8Array([9, 8, 7]), name: "person@example.com" };
 
 afterEach(() => {
   vi.useRealTimers();
@@ -50,99 +52,280 @@ function credential(options: {
   } as unknown as PublicKeyCredential;
 }
 
-function manager(options: { timeoutMs?: number; secretStore?: ReturnType<typeof createMemorySecretStore> } = {}) {
-  return createPasskeyKeyManager({
-    rpId: "example.com",
-    rpName: "Example",
-    profile,
-    ...options,
-  });
+function createManager(options: Parameters<typeof createPasskeyKeyManager>[0] = {}) {
+  return createPasskeyKeyManager(options);
 }
 
-const user = { id: new Uint8Array([9, 8, 7]), name: "person@example.com" };
+async function createFixture(storage = createMemoryPasskeyKeyStorage()) {
+  const prf = new Uint8Array(32).fill(3);
+  const rawId = new Uint8Array([1, 2, 3]);
+  installCredentials({
+    create: vi.fn(async () => credential({ rawId, prf, attachment: "platform" })),
+    get: vi.fn(async () => credential({ rawId, prf, attachment: "cross-platform" })),
+  });
+  const manager = createManager({ storage });
+  const key = new Uint8Array(32).map((_, index) => index);
+  const created = await manager.createAndWrapKey({ profile, user, key });
+  return { created, key, manager, storage };
+}
 
-describe("profile and storage", () => {
-  it("defensively copies profile and user handle inputs", async () => {
-    const mutableProfile = { ...profile, prfInput: profile.prfInput.slice() };
-    const keyManager = createPasskeyKeyManager({
-      rpId: "example.com",
-      rpName: "Example",
-      profile: mutableProfile,
+describe("contract flows", () => {
+  it("creates and recovers a wrapped key", async () => {
+    const { created, key, manager } = await createFixture();
+    const recovered = await manager.recoverKey({
+      profile,
+      wrappedKeys: [created.wrappedKey],
     });
-    mutableProfile.prfInput[0] = 0;
-    const exposed = keyManager.profile;
-    exposed.hkdfInfo[0] = 0;
-    expect(keyManager.profile.prfInput).toEqual(profile.prfInput);
-    expect(keyManager.profile.hkdfInfo).toEqual(profile.hkdfInfo);
+    expect(recovered).toEqual({ credentialId: created.credentialId, key });
+  });
 
+  it("uses profile RP fields and snapshots profile and user bytes", async () => {
+    const mutableProfile = {
+      ...profile,
+      prfSalt: profile.prfSalt.slice(),
+      hkdfInfo: profile.hkdfInfo.slice(),
+    };
+    const mutableUser = { ...user, id: user.id.slice() };
     const create = vi.fn(async (options: CredentialCreationOptions) => {
-      const request = options.publicKey!;
-      expect(new Uint8Array(bufferSourceToArrayBuffer(request.user.id))).toEqual(
-        new Uint8Array([9, 8, 7]),
-      );
+      expect(options.publicKey?.rp).toEqual({ id: "example.com", name: "Example" });
+      expect(
+        new Uint8Array(bufferSourceToArrayBuffer(options.publicKey!.user.id)),
+      ).toEqual(user.id);
+      const first = (
+        options.publicKey!.extensions as unknown as {
+          prf: { eval: { first: Uint8Array } };
+        }
+      ).prf.eval.first;
+      expect(first).toEqual(profile.prfSalt);
       return credential({ prf: new Uint8Array(32) });
     });
     installCredentials({ create } as Partial<CredentialsContainer>);
-    const handle = user.id.slice();
-    const pending = keyManager.createCredential({ ...user, id: handle });
-    handle[0] = 0;
+    const pending = createManager().createAndWrapKey({
+      profile: mutableProfile,
+      user: mutableUser,
+      key: new Uint8Array(32),
+    });
+    mutableProfile.prfSalt[0] = 0;
+    mutableProfile.hkdfInfo[0] = 0;
+    mutableUser.id[0] = 0;
     await pending;
   });
 
-  it("stores nothing by default and enables cache only with an explicit secret store", async () => {
-    const prf = new Uint8Array(32).fill(3);
+  it("has no storage by default and cache methods match credential IDs", async () => {
+    const prf = new Uint8Array(32).fill(4);
     installCredentials({ create: vi.fn(async () => credential({ prf })) });
-    const withoutStore = manager();
-    const enrolled = await withoutStore.enrollKey({ user });
-    await expect(withoutStore.unlockKeyFromCache([enrolled.wrappedKey])).resolves.toBeNull();
-
-    const secretStore = createMemorySecretStore();
-    const withStore = manager({ secretStore });
-    const cachedEnrollment = await withStore.enrollKey({ user });
-    await expect(withStore.unlockKeyFromCache([cachedEnrollment.wrappedKey])).resolves.toMatchObject({
-      credentialId: cachedEnrollment.credentialId,
+    const noStorage = createManager();
+    const created = await noStorage.createAndWrapKey({
+      profile,
+      user,
+      key: new Uint8Array(32),
     });
-    await expect(withStore.rewrapKeyFromCache(new Uint8Array(32))).resolves.not.toBeNull();
+    await expect(
+      noStorage.recoverKeyFromCache({ profile, wrappedKeys: [created.wrappedKey] }),
+    ).resolves.toBeNull();
+
+    const { manager, storage, created: cached } = await createFixture();
+    expect(storage.loadCachedPRFResult()?.credentialId).toBe(cached.credentialId);
+    const stranger: WrappedKey = { ...cached.wrappedKey, credentialId: "BAUG" };
+    await expect(
+      manager.recoverKeyFromCache({ profile, wrappedKeys: [stranger] }),
+    ).resolves.toBeNull();
+    await expect(
+      manager.recoverKeyFromCache({ profile, wrappedKeys: [cached.wrappedKey] }),
+    ).resolves.toMatchObject({ credentialId: cached.credentialId });
+  });
+
+  it("rewraps only with the latest successful cached credential", async () => {
+    const storage = createMemoryPasskeyKeyStorage();
+    const firstPrf = new Uint8Array(32).fill(1);
+    const secondPrf = new Uint8Array(32).fill(2);
+    const create = vi
+      .fn()
+      .mockResolvedValueOnce(
+        credential({ rawId: new Uint8Array([1]), prf: firstPrf }),
+      )
+      .mockResolvedValueOnce(
+        credential({ rawId: new Uint8Array([2]), prf: secondPrf }),
+      );
+    installCredentials({ create } as Partial<CredentialsContainer>);
+    const manager = createManager({ storage });
+    await manager.createAndWrapKey({ profile, user, key: new Uint8Array(32) });
+    await manager.createAndWrapKey({ profile, user, key: new Uint8Array(32) });
+    const rewrapped = await manager.rewrapKeyFromCache({
+      profile,
+      key: new Uint8Array(32),
+    });
+    expect(rewrapped?.credentialId).toBe("Ag");
+  });
+
+  it("catches every host storage operation independently", async () => {
+    installCredentials({
+      create: vi.fn(async () => credential({ prf: new Uint8Array(32) })),
+    });
+    const manager = createManager({
+      storage: {
+        loadCachedPRFResult: () => {
+          throw new Error("load cache");
+        },
+        saveCachedPRFResult: () => {
+          throw new Error("save cache");
+        },
+        loadLocalCredentialId: () => {
+          throw new Error("load local");
+        },
+        saveLocalCredentialId: () => {
+          throw new Error("save local");
+        },
+        clear: () => {
+          throw new Error("clear");
+        },
+      },
+    });
+    const created = await manager.createAndWrapKey({
+      profile,
+      user,
+      key: new Uint8Array(32),
+    });
+    await expect(
+      manager.recoverKeyFromCache({ profile, wrappedKeys: [created.wrappedKey] }),
+    ).resolves.toBeNull();
+    await expect(
+      manager.rewrapKeyFromCache({ profile, key: new Uint8Array(32) }),
+    ).resolves.toBeNull();
+    expect(() => manager.clearLocalState()).not.toThrow();
+  });
+
+  it("orders an explicit or stored preferred credential first", async () => {
+    const get = vi.fn(async (options: CredentialRequestOptions) => {
+      const ids = options.publicKey!.allowCredentials!.map((item) =>
+        bytesToBase64Url(
+          new Uint8Array(bufferSourceToArrayBuffer(item.id)),
+        ),
+      );
+      expect(ids).toEqual(["Ag", "AQ"]);
+      return credential({ rawId: new Uint8Array([2]), prf: new Uint8Array(32) });
+    });
+    installCredentials({ get } as Partial<CredentialsContainer>);
+    const wrappedKeys = ["AQ", "Ag"].map(
+      (credentialId): WrappedKey => ({
+        profileId: profile.id,
+        version: profile.version,
+        credentialId,
+        kekIvHex: "00".repeat(12),
+        wrappedKeyHex: "00".repeat(48),
+      }),
+    );
+    await expect(
+      createManager().recoverKey({
+        profile,
+        wrappedKeys,
+        preferredCredentialId: "Ag",
+      }),
+    ).rejects.toMatchObject({ category: "operation_failed" });
+    expect(get).toHaveBeenCalledOnce();
+  });
+});
+
+describe("capability", () => {
+  it("separates platform enrollment from general recovery", async () => {
+    installCredentials({ create: vi.fn(), get: vi.fn() });
+    vi.stubGlobal("PublicKeyCredential", {
+      isUserVerifyingPlatformAuthenticatorAvailable: vi.fn(async () => false),
+      getClientCapabilities: vi.fn(async () => ({ "extension-prf": true })),
+    });
+    const manager = createManager();
+    await expect(manager.capability({ operation: "enroll" })).resolves.toBe(
+      "unsupported",
+    );
+    await expect(manager.capability({ operation: "recover" })).resolves.toBe(
+      "supported",
+    );
+  });
+
+  it("returns unknown when PRF capability cannot be determined", async () => {
+    installCredentials({ create: vi.fn(), get: vi.fn() });
+    vi.stubGlobal("PublicKeyCredential", {
+      isUserVerifyingPlatformAuthenticatorAvailable: vi.fn(async () => true),
+    });
+    await expect(
+      createManager().capability({ operation: "enroll" }),
+    ).resolves.toBe("unknown");
   });
 });
 
 describe("ceremony lifecycle", () => {
-  it("rejects an already-aborted signal without starting a ceremony", async () => {
-    const create = vi.fn();
-    installCredentials({ create } as Partial<CredentialsContainer>);
-    const controller = new AbortController();
-    controller.abort("stop");
-    await expect(manager().createCredential(user, { signal: controller.signal })).rejects.toMatchObject({
-      code: "cancelledOrUnavailable",
-      operation: "createCredential",
+  it("maps NotAllowed to cancelled with its documented ambiguity", async () => {
+    installCredentials({
+      create: vi.fn(async () => {
+        throw new DOMException("", "NotAllowedError");
+      }),
     });
-    expect(create).not.toHaveBeenCalled();
+    await expect(
+      createManager().createAndWrapKey({
+        profile,
+        user,
+        key: new Uint8Array(32),
+      }),
+    ).rejects.toMatchObject({
+      category: "cancelled",
+      message: expect.stringContaining("no eligible credential"),
+    });
   });
 
-  it("aborts an active ceremony and releases the operation slot", async () => {
+  it("rejects concurrent ceremonies and releases after caller cancellation", async () => {
     const create = vi.fn((options: CredentialCreationOptions) =>
       new Promise((_, reject) => {
-        options.signal?.addEventListener("abort", () => reject(new DOMException("", "AbortError")));
+        options.signal?.addEventListener("abort", () =>
+          reject(new DOMException("", "AbortError")),
+        );
       }),
     );
     installCredentials({ create } as Partial<CredentialsContainer>);
-    const keyManager = manager();
+    const manager = createManager();
     const controller = new AbortController();
-    const first = keyManager.createCredential(user, { signal: controller.signal });
-    await expect(keyManager.createCredential(user)).rejects.toMatchObject({
-      code: "operationInProgress",
+    const first = manager.createAndWrapKey({
+      profile,
+      user,
+      key: new Uint8Array(32),
+      signal: controller.signal,
     });
+    await expect(
+      manager.createAndWrapKey({ profile, user, key: new Uint8Array(32) }),
+    ).rejects.toMatchObject({ category: "operation_in_progress" });
     controller.abort();
-    await expect(first).rejects.toMatchObject({ code: "cancelledOrUnavailable" });
-
+    await expect(first).rejects.toMatchObject({ category: "cancelled" });
     create.mockResolvedValueOnce(credential({ prf: new Uint8Array(32) }));
-    await expect(keyManager.createCredential(user)).resolves.toBeDefined();
+    await expect(
+      manager.createAndWrapKey({ profile, user, key: new Uint8Array(32) }),
+    ).resolves.toBeDefined();
   });
 
-  it("aborts on timeout, ignores late completion, and permits the next operation", async () => {
+  it("supports explicit cancellation", async () => {
+    let ceremonySignal: AbortSignal | undefined;
+    installCredentials({
+      create: vi.fn(
+        (options: CredentialCreationOptions) =>
+          new Promise(() => {
+            ceremonySignal = options.signal;
+          }),
+      ),
+    } as Partial<CredentialsContainer>);
+    const manager = createManager();
+    const pending = manager.createAndWrapKey({
+      profile,
+      user,
+      key: new Uint8Array(32),
+    });
+    manager.cancelActiveCeremony();
+    await expect(pending).rejects.toMatchObject({ category: "cancelled" });
+    expect(ceremonySignal?.aborted).toBe(true);
+  });
+
+  it("aborts on timeout, ignores late completion, and permits the next ceremony", async () => {
     vi.useFakeTimers();
     let resolveLate!: (value: PublicKeyCredential) => void;
     let ceremonySignal: AbortSignal | undefined;
+    const storage = createMemoryPasskeyKeyStorage();
     const create = vi
       .fn()
       .mockImplementationOnce(
@@ -154,53 +337,21 @@ describe("ceremony lifecycle", () => {
       )
       .mockResolvedValueOnce(credential({ prf: new Uint8Array(32) }));
     installCredentials({ create } as Partial<CredentialsContainer>);
-    const secretStore = createMemorySecretStore();
-    const keyManager = manager({ timeoutMs: 25, secretStore });
-    const first = keyManager.createCredential(user);
+    const manager = createManager({ timeoutMs: 25, storage });
+    const first = manager.createAndWrapKey({
+      profile,
+      user,
+      key: new Uint8Array(32),
+    });
     first.catch(() => {});
     await vi.advanceTimersByTimeAsync(25);
-    await expect(first).rejects.toMatchObject({ code: "timeout" });
+    await expect(first).rejects.toMatchObject({ category: "timeout" });
     expect(ceremonySignal?.aborted).toBe(true);
     resolveLate(credential({ prf: new Uint8Array(32).fill(9) }));
     await Promise.resolve();
+    expect(storage.loadCachedPRFResult()).toBeNull();
     await expect(
-      secretStore.list({ rpId: "example.com", profileId: profile.id }),
-    ).resolves.toEqual([]);
-    await expect(keyManager.createCredential(user)).resolves.toBeDefined();
-  });
-
-  it("reports NotAllowedError honestly", async () => {
-    installCredentials({
-      create: vi.fn(async () => {
-        throw new DOMException("", "NotAllowedError");
-      }),
-    });
-    await expect(manager().createCredential(user)).rejects.toMatchObject({
-      code: "cancelledOrUnavailable",
-    });
-  });
-});
-
-describe("unlock behavior", () => {
-  it("orders the preferred credential first", async () => {
-    const get = vi.fn(async (options: CredentialRequestOptions) => {
-      const ids = options.publicKey!.allowCredentials!.map((item) =>
-        bytesToBase64Url(new Uint8Array(bufferSourceToArrayBuffer(item.id))),
-      );
-      expect(ids).toEqual(["Ag", "AQ"]);
-      return credential({ rawId: new Uint8Array([2]), prf: new Uint8Array(32) });
-    });
-    installCredentials({ get } as Partial<CredentialsContainer>);
-    await manager().evaluateCredential(["AQ", "Ag"], { preferredCredentialId: "Ag" });
-  });
-
-  it("allows unlock attempts when platform enrollment is unavailable", async () => {
-    installCredentials({ get: vi.fn() } as Partial<CredentialsContainer>);
-    vi.stubGlobal("PublicKeyCredential", {
-      isUserVerifyingPlatformAuthenticatorAvailable: vi.fn(async () => false),
-    });
-    const keyManager = manager();
-    await expect(keyManager.canEnrollPlatformPasskey()).resolves.toBe(false);
-    await expect(keyManager.canAttemptPasskeyUnlock()).resolves.toBe(true);
+      manager.createAndWrapKey({ profile, user, key: new Uint8Array(32) }),
+    ).resolves.toBeDefined();
   });
 });

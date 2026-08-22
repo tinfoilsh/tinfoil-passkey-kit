@@ -1,45 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-  deriveStableKeyId,
+  copyAndValidateProfile,
   deriveWrappingKey,
-  generateKeyMaterial,
   unwrapKey,
+  validateKey,
   wrapKey,
 } from "../../src/crypto.js";
-import { PasskeyKeyError } from "../../src/errors.js";
 import type { PasskeyKeyProfile } from "../../src/types.js";
 
 const encoder = new TextEncoder();
 const profile: PasskeyKeyProfile = {
   id: "tinfoil-v1",
-  prfInput: encoder.encode("tinfoil-chat-key-encryption"),
-  hkdfSalt: new Uint8Array(),
+  version: 1,
+  relyingPartyId: "example.com",
+  relyingPartyName: "Example",
+  prfSalt: encoder.encode("tinfoil-chat-key-encryption"),
   hkdfInfo: encoder.encode("tinfoil-chat-kek-v1"),
-  keyLengthBytes: 32,
 };
 
-describe("generic crypto API", () => {
-  it("generates the profile's requested key length", () => {
-    expect(generateKeyMaterial(profile)).toHaveLength(32);
-  });
-
-  it("preserves the existing Tinfoil AES-GCM/HKDF wire bytes", async () => {
+describe("key wrapping", () => {
+  it("preserves the existing adapter wire bytes", async () => {
     const prfOutput = new Uint8Array(32).map((_, index) => index);
-    const keyMaterial = new Uint8Array(32).map((_, index) => 255 - index);
+    const key = new Uint8Array(32).map((_, index) => 255 - index);
     const iv = new Uint8Array(12).map((_, index) => index + 1);
-    const random = vi.spyOn(crypto, "getRandomValues").mockImplementation((value) => {
+    vi.spyOn(crypto, "getRandomValues").mockImplementation((value) => {
       new Uint8Array(value.buffer, value.byteOffset, value.byteLength).set(iv);
       return value;
     });
-    const wrappingKey = await deriveWrappingKey(prfOutput, profile);
-    const wrapped = await wrapKey({
-      profile,
-      credentialId: "AQID",
-      wrappingKey,
-      keyMaterial,
-    });
-    random.mockRestore();
 
+    const wrapped = await wrapKey(profile, "AQID", prfOutput, key);
     const adapterFixture = {
       credentialId: "AQID",
       kekIvHex: "0102030405060708090a0b0c",
@@ -47,70 +36,72 @@ describe("generic crypto API", () => {
         "53c8f700925c9f94a7cf679d8a892c82f7c443769103a322e477a38d9118f0a014a659136ee1b9f6ed4921877f17aca7",
     };
     expect(wrapped).toEqual({
-      version: 1,
-      profileId: "tinfoil-v1",
-      credentialId: adapterFixture.credentialId,
-      ivHex: adapterFixture.kekIvHex,
-      ciphertextHex: adapterFixture.wrappedKeyHex,
+      profileId: profile.id,
+      version: profile.version,
+      ...adapterFixture,
     });
     expect(
-      await unwrapKey({
-        profile,
-        wrappingKey,
-        wrappedKey: {
-          version: 1,
-          profileId: profile.id,
-          credentialId: adapterFixture.credentialId,
-          ivHex: adapterFixture.kekIvHex,
-          ciphertextHex: adapterFixture.wrappedKeyHex,
-        },
+      await unwrapKey(profile, prfOutput, {
+        profileId: profile.id,
+        version: profile.version,
+        ...adapterFixture,
       }),
-    ).toEqual(keyMaterial);
+    ).toEqual(key);
   });
 
-  it("rejects profile mismatches and malformed or tampered records", async () => {
-    const prf = new Uint8Array(32);
-    const wrappingKey = await deriveWrappingKey(prf, profile);
-    const wrapped = await wrapKey({
-      profile,
-      credentialId: "AQ",
-      wrappingKey,
-      keyMaterial: new Uint8Array(32),
-    });
-    await expect(
-      unwrapKey({ profile: { ...profile, id: "other" }, wrappingKey, wrappedKey: wrapped }),
-    ).rejects.toMatchObject({ code: "invalidInput" });
-    await expect(
-      unwrapKey({
-        profile,
-        wrappingKey,
-        wrappedKey: {
-          ...wrapped,
-          ciphertextHex: `${wrapped.ciphertextHex[0] === "0" ? "1" : "0"}${wrapped.ciphertextHex.slice(1)}`,
-        },
-      }),
-    ).rejects.toMatchObject({ code: "cryptoFailure" });
-    await expect(
-      unwrapKey({ profile, wrappingKey, wrappedKey: { ...wrapped, ivHex: "xyz" } }),
-    ).rejects.toMatchObject({ code: "invalidInput" });
+  it("derives a non-extractable AES-256-GCM key", async () => {
+    const key = await deriveWrappingKey(new Uint8Array(32), profile);
+    expect(key.algorithm).toMatchObject({ name: "AES-GCM", length: 256 });
+    expect(key.extractable).toBe(false);
   });
 
-  it("validates profiles, key lengths, and PRF output length", async () => {
-    expect(() => generateKeyMaterial({ ...profile, keyLengthBytes: 0 })).toThrow(PasskeyKeyError);
-    expect(() => generateKeyMaterial({ ...profile, keyLengthBytes: 1.5 })).toThrow(PasskeyKeyError);
-    expect(() => generateKeyMaterial({ ...profile, prfInput: new Uint8Array() })).toThrow(
-      PasskeyKeyError,
+  it("accepts exactly 32 key bytes", () => {
+    expect(() => validateKey(new Uint8Array(32))).not.toThrow();
+    expect(() => validateKey(new Uint8Array(31))).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
     );
-    await expect(deriveWrappingKey(new Uint8Array(31), profile)).rejects.toMatchObject({
-      code: "invalidInput",
-    });
+    expect(() => validateKey(new Uint8Array(33))).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
   });
 
-  it("derives stable identifiers and validates output lengths", async () => {
-    const key = new Uint8Array(32).map((_, index) => index);
-    expect(await deriveStableKeyId(key)).toEqual(await deriveStableKeyId(key));
-    await expect(deriveStableKeyId(key, { lengthBytes: 0 })).rejects.toMatchObject({
-      code: "invalidInput",
+  it("strictly validates and defensively copies profiles", () => {
+    const input = {
+      ...profile,
+      prfSalt: profile.prfSalt.slice(),
+      hkdfInfo: profile.hkdfInfo.slice(),
+    };
+    const copied = copyAndValidateProfile(input);
+    input.prfSalt[0] = 0;
+    input.hkdfInfo[0] = 0;
+    expect(copied.prfSalt).toEqual(profile.prfSalt);
+    expect(copied.hkdfInfo).toEqual(profile.hkdfInfo);
+    expect(() => copyAndValidateProfile({ ...profile, extra: true } as never)).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
+    expect(() => copyAndValidateProfile({ ...profile, version: 0 })).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
+  });
+
+  it("rejects profile mismatches, malformed fields, and tampering", async () => {
+    const prfOutput = new Uint8Array(32);
+    const wrapped = await wrapKey(profile, "AQ", prfOutput, new Uint8Array(32));
+    await expect(
+      unwrapKey({ ...profile, id: "other" }, prfOutput, wrapped),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+    await expect(
+      unwrapKey(profile, prfOutput, { ...wrapped, kekIvHex: "bad" }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+    const first = wrapped.wrappedKeyHex[0] === "0" ? "1" : "0";
+    await expect(
+      unwrapKey(profile, prfOutput, {
+        ...wrapped,
+        wrappedKeyHex: `${first}${wrapped.wrappedKeyHex.slice(1)}`,
+      }),
+    ).rejects.toMatchObject({ category: "operation_failed" });
+    await expect(deriveWrappingKey(new Uint8Array(31), profile)).rejects.toMatchObject({
+      category: "invalid_input",
     });
   });
 });

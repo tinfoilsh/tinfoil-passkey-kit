@@ -1,6 +1,6 @@
 import { base64UrlToBytes, bufferSourceToArrayBuffer, bytesToBase64Url } from "./codec.js";
 import { invalidInput, PasskeyKeyError } from "./errors.js";
-import type { PasskeyUser, PrfResult } from "./types.js";
+import type { PasskeyUser } from "./types.js";
 
 const CHALLENGE_BYTES = 32;
 const MAX_USER_HANDLE_BYTES = 64;
@@ -13,7 +13,9 @@ export interface CeremonyContext {
   timeoutMs: number;
 }
 
-export interface InternalPrfResult extends PrfResult {
+export interface InternalPrfResult {
+  credentialId: string;
+  prfOutput: Uint8Array;
   isPlatformAuthenticator: boolean;
 }
 
@@ -37,7 +39,7 @@ function credentialId(credential: PublicKeyCredential): string {
 function resultFromCredential(credential: PublicKeyCredential): InternalPrfResult {
   const first = extensionResults(credential).prf?.results?.first;
   if (!first) {
-    throw new PasskeyKeyError("prfUnsupported", "the authenticator returned no PRF output");
+    throw new PasskeyKeyError("unsupported", "the authenticator returned no PRF output");
   }
   const prfOutput = new Uint8Array(bufferSourceToArrayBuffer(first));
   if (prfOutput.length !== PRF_OUTPUT_BYTES) {
@@ -56,16 +58,16 @@ export async function createPrfCredential(
   signal: AbortSignal,
 ): Promise<InternalPrfResult> {
   if (!(user?.id instanceof Uint8Array) || user.id.length === 0) {
-    throw invalidInput("user.id must be a non-empty Uint8Array", "createCredential");
+    throw invalidInput("user.id must be a non-empty Uint8Array");
   }
   if (user.id.length > MAX_USER_HANDLE_BYTES) {
-    throw invalidInput(`user.id must be at most ${MAX_USER_HANDLE_BYTES} bytes`, "createCredential");
+    throw invalidInput(`user.id must be at most ${MAX_USER_HANDLE_BYTES} bytes`);
   }
   if (typeof user.name !== "string" || user.name.length === 0) {
-    throw invalidInput("user.name must be a non-empty string", "createCredential");
+    throw invalidInput("user.name must be a non-empty string");
   }
   if (user.displayName !== undefined && (typeof user.displayName !== "string" || !user.displayName)) {
-    throw invalidInput("user.displayName must be a non-empty string", "createCredential");
+    throw invalidInput("user.displayName must be a non-empty string");
   }
 
   const credential = (await navigator.credentials.create({
@@ -96,16 +98,13 @@ export async function createPrfCredential(
 
   if (!credential) {
     throw new PasskeyKeyError(
-      "cancelledOrUnavailable",
-      "credential creation was cancelled or unavailable",
-      { operation: "createCredential" },
+      "cancelled",
+      "credential creation was cancelled or no eligible credential was available",
     );
   }
   const extension = extensionResults(credential).prf;
   if (!extension?.enabled) {
-    throw new PasskeyKeyError("prfUnsupported", "the authenticator does not support PRF", {
-      operation: "createCredential",
-    });
+    throw new PasskeyKeyError("unsupported", "the authenticator does not support PRF");
   }
   if (extension.results?.first) return resultFromCredential(credential);
 
@@ -135,9 +134,8 @@ export async function evaluatePrfCredential(
   })) as PublicKeyCredential | null;
   if (!assertion) {
     throw new PasskeyKeyError(
-      "cancelledOrUnavailable",
-      "credential evaluation was cancelled or unavailable",
-      { operation: "evaluateCredential" },
+      "cancelled",
+      "credential evaluation was cancelled or no eligible credential was available",
     );
   }
   return resultFromCredential(assertion);
