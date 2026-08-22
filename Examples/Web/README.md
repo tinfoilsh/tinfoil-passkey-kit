@@ -12,7 +12,8 @@ npm run build
 npx serve .
 ```
 
-Open `http://localhost:3000/Examples/Web/` (or the URL printed by `serve`).
-Browsers treat localhost as a secure context for WebAuthn, and the relying-party
-ID must match localhost. Replace the example profile and user values for your
-application. Reloading clears the in-memory repository.
+Open only the localhost URL printed by `serve`. Browsers treat localhost as a
+secure context for WebAuthn, and the relying-party ID must match localhost. Do
+not use the network or LAN URL unless the profile relying-party ID and a secure
+origin are deliberately configured for that host. Reloading clears the
+in-memory repository.
