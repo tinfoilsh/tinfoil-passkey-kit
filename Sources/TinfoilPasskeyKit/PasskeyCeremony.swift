@@ -43,9 +43,9 @@ protocol CeremonyDriving: AnyObject {
 
 @MainActor
 final class ApplePasskeyCeremonyDriver: CeremonyDriving {
-    private let presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)?
+    private let presentationAnchorProvider: any PasskeyPresentationAnchorProviding
 
-    init(presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)? = nil) {
+    init(presentationAnchorProvider: any PasskeyPresentationAnchorProviding) {
         self.presentationAnchorProvider = presentationAnchorProvider
     }
 
@@ -82,11 +82,11 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
     private var completion: (@MainActor (Result<CeremonyResult, Error>) -> Void)?
     private var fallbackProfile: PasskeyKeyProfile?
     private var createdCredentialId: String?
-    private let presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)?
+    private let presentationAnchorProvider: any PasskeyPresentationAnchorProviding
     private var presentationContextProvider: ApplePresentationContextProvider?
 
     init(
-        presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)?,
+        presentationAnchorProvider: any PasskeyPresentationAnchorProviding,
         completion: @escaping @MainActor (Result<CeremonyResult, Error>) -> Void
     ) {
         self.presentationAnchorProvider = presentationAnchorProvider
@@ -150,13 +150,11 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
     ) {
         let controller = ASAuthorizationController(authorizationRequests: requests)
         controller.delegate = self
-        if let presentationAnchorProvider {
-            let contextProvider = ApplePresentationContextProvider(
-                anchorProvider: presentationAnchorProvider
-            )
-            presentationContextProvider = contextProvider
-            controller.presentationContextProvider = contextProvider
-        }
+        let contextProvider = ApplePresentationContextProvider(
+            anchorProvider: presentationAnchorProvider
+        )
+        presentationContextProvider = contextProvider
+        controller.presentationContextProvider = contextProvider
         authorizationController = controller
         switch interaction {
         case .interactive:

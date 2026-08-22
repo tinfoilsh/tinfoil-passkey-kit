@@ -1,3 +1,4 @@
+import AuthenticationServices
 import Foundation
 import XCTest
 @testable import TinfoilPasskeyKit
@@ -41,12 +42,17 @@ final class PasskeyModelsTests: XCTestCase {
                 try PasskeyKeyManager(
                     profile: value,
                     relyingPartyName: "Example",
+                    presentationAnchorProvider: TestPresentationAnchorProvider(),
                     timeout: timeout
                 )
             )
         }
         XCTAssertThrowsError(
-            try PasskeyKeyManager(profile: value, relyingPartyName: "")
+            try PasskeyKeyManager(
+                profile: value,
+                relyingPartyName: "",
+                presentationAnchorProvider: TestPresentationAnchorProvider()
+            )
         )
     }
 
@@ -62,5 +68,12 @@ final class PasskeyModelsTests: XCTestCase {
             prfSalt: prfSalt,
             hkdfInfo: hkdfInfo
         )
+    }
+}
+
+@MainActor
+private final class TestPresentationAnchorProvider: PasskeyPresentationAnchorProviding {
+    var presentationAnchor: ASPresentationAnchor {
+        fatalError("Presentation is not exercised by model tests")
     }
 }

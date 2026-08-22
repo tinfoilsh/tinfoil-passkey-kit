@@ -25,7 +25,7 @@ public final class PasskeyKeyManager {
         profile: PasskeyKeyProfile,
         relyingPartyName: String,
         storage: (any PasskeyKeyStorage)? = nil,
-        presentationAnchorProvider: (any PasskeyPresentationAnchorProviding)? = nil,
+        presentationAnchorProvider: any PasskeyPresentationAnchorProviding,
         timeout: TimeInterval = 60
     ) throws {
         try self.init(
