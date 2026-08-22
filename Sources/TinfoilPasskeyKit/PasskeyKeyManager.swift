@@ -17,23 +17,19 @@ public final class PasskeyKeyManager {
     private let profile: PasskeyKeyProfile
     private let storage: (any PasskeyKeyStorage)?
     private let timeout: TimeInterval
-    private let logger: PasskeyKeyLogger?
     private let ceremonyDriver: any CeremonyDriving
     private let ceremonyMode: CeremonyMode
     private var activeCeremony: ActiveCeremony?
-    private(set) var storageDiagnostic: Error?
 
     public convenience init(
         profile: PasskeyKeyProfile,
         storage: (any PasskeyKeyStorage)? = nil,
-        timeout: TimeInterval = 60,
-        logger: PasskeyKeyLogger? = nil
+        timeout: TimeInterval = 60
     ) throws {
         try self.init(
             profile: profile,
             storage: storage,
             timeout: timeout,
-            logger: logger,
             ceremonyDriver: ApplePasskeyCeremonyDriver(),
             ceremonyMode: .interactive
         )
@@ -43,7 +39,6 @@ public final class PasskeyKeyManager {
         profile: PasskeyKeyProfile,
         storage: (any PasskeyKeyStorage)?,
         timeout: TimeInterval,
-        logger: PasskeyKeyLogger?,
         ceremonyDriver: any CeremonyDriving,
         ceremonyMode: CeremonyMode
     ) throws {
@@ -53,7 +48,6 @@ public final class PasskeyKeyManager {
         self.profile = profile
         self.storage = storage
         self.timeout = timeout
-        self.logger = logger
         self.ceremonyDriver = ceremonyDriver
         self.ceremonyMode = ceremonyMode
     }
@@ -152,9 +146,7 @@ public final class PasskeyKeyManager {
     public func clearLocalState() {
         do {
             try storage?.clear()
-        } catch {
-            recordStorageDiagnostic(error)
-        }
+        } catch {}
     }
 
     public func cancelActiveCeremony() {
@@ -303,15 +295,11 @@ public final class PasskeyKeyManager {
                     prfOutput: result.prfOutput
                 )
             )
-        } catch {
-            recordStorageDiagnostic(error)
-        }
+        } catch {}
         if result.isPlatformAuthenticator {
             do {
                 try storage?.saveLocalCredentialId(result.credentialId)
-            } catch {
-                recordStorageDiagnostic(error)
-            }
+            } catch {}
         }
     }
 
@@ -325,7 +313,6 @@ public final class PasskeyKeyManager {
             }
             return result
         } catch {
-            recordStorageDiagnostic(error)
             return nil
         }
     }
@@ -334,13 +321,7 @@ public final class PasskeyKeyManager {
         do {
             return try storage?.loadLocalCredentialId()
         } catch {
-            recordStorageDiagnostic(error)
             return nil
         }
-    }
-
-    private func recordStorageDiagnostic(_ error: Error) {
-        storageDiagnostic = error
-        logger?(error)
     }
 }

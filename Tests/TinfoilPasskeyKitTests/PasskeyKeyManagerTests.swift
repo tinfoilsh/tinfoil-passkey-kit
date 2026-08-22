@@ -91,7 +91,6 @@ final class PasskeyKeyManagerTests: XCTestCase {
             profile: otherProfile,
             storage: storage,
             timeout: 1,
-            logger: nil,
             ceremonyDriver: TestCeremonyDriver(),
             ceremonyMode: .interactive
         )
@@ -130,23 +129,23 @@ final class PasskeyKeyManagerTests: XCTestCase {
         XCTAssertNil(try manager.rewrapKeyFromCache(key: key))
     }
 
-    func testStorageFailuresDoNotDiscardSuccessAndRetainDiagnostics() async throws {
+    func testStorageFailuresDoNotDiscardSuccessfulResults() async throws {
         let storage = FailingStorage()
-        var diagnostics: [Error] = []
         let manager = try makeManager(
-            driver: TestCeremonyDriver(behaviors: [.immediate(.success(result()))]),
-            storage: storage,
-            logger: { diagnostics.append($0) }
+            driver: TestCeremonyDriver(behaviors: [
+                .immediate(.success(result())),
+                .immediate(.success(result(isPlatformAuthenticator: false)))
+            ]),
+            storage: storage
         )
 
         let created = try await manager.createAndWrapKey(user: user, key: key)
+        let recovered = try await manager.recoverKey(wrappedKeys: [created.wrappedKey])
         XCTAssertEqual(created.credentialId, "AQID")
-        XCTAssertNotNil(manager.storageDiagnostic)
-        XCTAssertFalse(diagnostics.isEmpty)
+        XCTAssertEqual(recovered.key, key)
         XCTAssertNil(try manager.recoverKeyFromCache(wrappedKeys: [created.wrappedKey]))
         XCTAssertNil(try manager.rewrapKeyFromCache(key: key))
         manager.clearLocalState()
-        XCTAssertNotNil(manager.storageDiagnostic)
     }
 
     func testRecoveryCachesSuccessfulCeremonyBeforeDecryption() async throws {
@@ -310,14 +309,12 @@ final class PasskeyKeyManagerTests: XCTestCase {
         driver: TestCeremonyDriver,
         ceremonyMode: CeremonyMode = .interactive,
         timeout: TimeInterval = 1,
-        storage: (any PasskeyKeyStorage)? = nil,
-        logger: PasskeyKeyLogger? = nil
+        storage: (any PasskeyKeyStorage)? = nil
     ) throws -> PasskeyKeyManager {
         try PasskeyKeyManager(
             profile: profile,
             storage: storage,
             timeout: timeout,
-            logger: logger,
             ceremonyDriver: driver,
             ceremonyMode: ceremonyMode
         )

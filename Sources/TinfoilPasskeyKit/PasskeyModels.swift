@@ -67,8 +67,6 @@ public struct PasskeyKeyProfile: Codable, Equatable, Sendable {
     }
 }
 
-public typealias PasskeyKeyLogger = @MainActor (_ error: Error) -> Void
-
 private struct ProfileCodingKey: CodingKey {
     let stringValue: String
     let intValue: Int?
