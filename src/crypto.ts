@@ -1,161 +1,206 @@
-/**
- * Pure WebCrypto primitives: PRF output → KEK derivation (HKDF-SHA-256)
- * and CEK wrap/unwrap under that KEK (AES-256-GCM).
- *
- * References:
- * - W3C WebAuthn Level 3, §10.1.4 (PRF extension): https://w3c.github.io/webauthn/#prf-extension
- * - RFC 5869 (HKDF): https://tools.ietf.org/html/rfc5869
- */
+import { bytesToHex, hexToBytes } from "./codec.js";
+import { cryptoFailure, invalidInput, PasskeyKeyError } from "./errors.js";
+import type { PasskeyKeyProfile, WrappedKey } from "./types.js";
 
-import { bytesToHex, hexToBytes, toBytes } from "./codec.js";
-import { PasskeyKitError } from "./errors.js";
-import { TINFOIL_HKDF_INFO_V1, TINFOIL_KEY_ID_INFO_V1 } from "./protocol.js";
-import type { WrappedCek } from "./types.js";
-
-export const CEK_BYTES = 32;
 const AES_GCM_IV_BYTES = 12;
-const DEFAULT_KEY_ID_BYTES = 16;
+const AES_GCM_TAG_BYTES = 16;
+const PRF_OUTPUT_BYTES = 32;
+const DEFAULT_STABLE_ID_BYTES = 16;
+const MAX_RANDOM_KEY_BYTES = 65_536;
+const DEFAULT_STABLE_ID_INFO = new TextEncoder().encode("tinfoil-key-id-v1");
 
-/** Generate a fresh random 32-byte CEK suitable for {@link wrapCek}. */
-export function generateCek(): Uint8Array {
-  return crypto.getRandomValues(new Uint8Array(CEK_BYTES));
+function assertBytes(value: unknown, name: string, allowEmpty = false): asserts value is Uint8Array {
+  if (!(value instanceof Uint8Array) || (!allowEmpty && value.length === 0)) {
+    throw invalidInput(`${name} must be ${allowEmpty ? "a" : "a non-empty"} Uint8Array`);
+  }
 }
 
-/**
- * Type guard for a well-formed CEK: a Uint8Array of exactly
- * {@link CEK_BYTES} bytes. Useful for validating deserialized input
- * before wrapping.
- */
-export function isValidCek(cek: unknown): cek is Uint8Array {
-  return cek instanceof Uint8Array && cek.length === CEK_BYTES;
-}
-
-/**
- * Derive an AES-256-GCM Key Encryption Key (KEK) from PRF output using HKDF.
- *
- * Raw PRF output is treated as Input Keying Material (IKM), not used
- * directly as a key. HKDF with a purpose-binding info string produces the
- * final non-extractable CryptoKey. An empty HKDF salt is used, which is
- * fine for high-entropy IKM (RFC 5869 §3.1).
- *
- * `hkdfInfo` defaults to the Tinfoil v1 protocol constant so standalone
- * callers derive the same interoperable KEK as a default-configured kit.
- */
-export async function deriveKeyEncryptionKey(
-  prfOutput: ArrayBuffer | Uint8Array,
-  hkdfInfo: string | Uint8Array = TINFOIL_HKDF_INFO_V1,
-): Promise<CryptoKey> {
-  const masterKey = await crypto.subtle.importKey(
-    "raw",
-    prfOutput as BufferSource,
-    "HKDF",
-    false, // non-extractable
-    ["deriveKey"],
-  );
-
-  return crypto.subtle.deriveKey(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt: new Uint8Array(),
-      info: toBytes(hkdfInfo) as BufferSource,
-    },
-    masterKey,
-    { name: "AES-GCM", length: 256 },
-    false, // non-extractable
-    ["encrypt", "decrypt"],
-  );
-}
-
-/**
- * Wrap a raw 32-byte CEK under a passkey-derived KEK using AES-256-GCM
- * with a fresh random IV. The returned hex fields are safe to persist
- * server-side; only the matching passkey can recover the CEK.
- */
-export async function wrapCek(opts: {
-  credentialId: string;
-  kek: CryptoKey;
-  cek: Uint8Array;
-}): Promise<WrappedCek> {
-  if (opts.cek.length !== CEK_BYTES) {
-    throw new PasskeyKitError(
-      `passkey-kit: CEK must be ${CEK_BYTES} bytes, got ${opts.cek.length}`,
+export function copyAndValidateProfile(profile: PasskeyKeyProfile): PasskeyKeyProfile {
+  if (!profile || typeof profile !== "object") throw invalidInput("profile is required");
+  if (typeof profile.id !== "string" || profile.id.length === 0) {
+    throw invalidInput("profile.id must be a non-empty string");
+  }
+  assertBytes(profile.prfInput, "profile.prfInput");
+  assertBytes(profile.hkdfSalt, "profile.hkdfSalt", true);
+  assertBytes(profile.hkdfInfo, "profile.hkdfInfo");
+  if (
+    !Number.isSafeInteger(profile.keyLengthBytes) ||
+    profile.keyLengthBytes <= 0 ||
+    profile.keyLengthBytes > MAX_RANDOM_KEY_BYTES
+  ) {
+    throw invalidInput(
+      `profile.keyLengthBytes must be an integer from 1 through ${MAX_RANDOM_KEY_BYTES}`,
     );
   }
-  const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
-  const ciphertext = await crypto.subtle.encrypt(
-    { name: "AES-GCM", iv: iv as BufferSource },
-    opts.kek,
-    opts.cek as BufferSource,
-  );
   return {
-    credentialId: opts.credentialId,
-    kekIvHex: bytesToHex(iv),
-    wrappedKeyHex: bytesToHex(new Uint8Array(ciphertext)),
+    id: profile.id,
+    prfInput: profile.prfInput.slice(),
+    hkdfSalt: profile.hkdfSalt.slice(),
+    hkdfInfo: profile.hkdfInfo.slice(),
+    keyLengthBytes: profile.keyLengthBytes,
   };
 }
 
-/**
- * Inverse of {@link wrapCek}: recover the raw CEK bytes given the same KEK.
- * Throws on tamper (GCM auth failure) or any shape mismatch.
- */
-export async function unwrapCek(
-  kek: CryptoKey,
-  wrapped: Pick<WrappedCek, "kekIvHex" | "wrappedKeyHex">,
-): Promise<Uint8Array> {
-  if (!wrapped.kekIvHex || !wrapped.wrappedKeyHex) {
-    throw new PasskeyKitError("passkey-kit: missing iv or wrapped key");
-  }
-  const iv = hexToBytes(wrapped.kekIvHex);
-  if (iv.length !== AES_GCM_IV_BYTES) {
-    throw new PasskeyKitError("passkey-kit: iv length mismatch");
-  }
-  const ciphertext = hexToBytes(wrapped.wrappedKeyHex);
-  const plaintext = await crypto.subtle.decrypt(
-    { name: "AES-GCM", iv: iv as BufferSource },
-    kek,
-    ciphertext as BufferSource,
-  );
-  const cek = new Uint8Array(plaintext);
-  if (cek.length !== CEK_BYTES) {
-    throw new PasskeyKitError(
-      `passkey-kit: unwrapped CEK has wrong length ${cek.length}`,
-    );
-  }
-  return cek;
+export function copyProfile(profile: PasskeyKeyProfile): PasskeyKeyProfile {
+  return {
+    ...profile,
+    prfInput: profile.prfInput.slice(),
+    hkdfSalt: profile.hkdfSalt.slice(),
+    hkdfInfo: profile.hkdfInfo.slice(),
+  };
 }
 
-/**
- * Derive a stable public identifier for a CEK via HKDF-SHA-256 with an
- * empty salt and a purpose-binding info string. The result identifies the key
- * without revealing it (one-way derivation).
- */
-export async function deriveKeyId(
-  cek: Uint8Array,
-  opts: { info?: string | Uint8Array; lengthBytes?: number } = {},
-): Promise<Uint8Array> {
-  if (cek.length !== CEK_BYTES) {
-    throw new PasskeyKitError(
-      `passkey-kit: CEK must be ${CEK_BYTES} bytes, got ${cek.length}`,
-    );
+export function generateKeyMaterial(profile: PasskeyKeyProfile): Uint8Array {
+  const validated = copyAndValidateProfile(profile);
+  try {
+    return crypto.getRandomValues(new Uint8Array(validated.keyLengthBytes));
+  } catch (cause) {
+    throw cryptoFailure("failed to generate key material", cause, "generateKeyMaterial");
   }
-  const lengthBytes = opts.lengthBytes ?? DEFAULT_KEY_ID_BYTES;
-  const ikm = await crypto.subtle.importKey(
-    "raw",
-    cek as BufferSource,
-    "HKDF",
-    false,
-    ["deriveBits"],
-  );
-  const bits = await crypto.subtle.deriveBits(
-    {
-      name: "HKDF",
-      hash: "SHA-256",
-      salt: new Uint8Array(0) as BufferSource,
-      info: toBytes(opts.info ?? TINFOIL_KEY_ID_INFO_V1) as BufferSource,
-    },
-    ikm,
-    lengthBytes * 8,
-  );
-  return new Uint8Array(bits);
+}
+
+export async function deriveWrappingKey(
+  prfOutput: Uint8Array,
+  profile: PasskeyKeyProfile,
+): Promise<CryptoKey> {
+  const validated = copyAndValidateProfile(profile);
+  assertBytes(prfOutput, "prfOutput");
+  if (prfOutput.length !== PRF_OUTPUT_BYTES) {
+    throw invalidInput(`prfOutput must be ${PRF_OUTPUT_BYTES} bytes`, "deriveWrappingKey");
+  }
+  try {
+    const ikm = await crypto.subtle.importKey("raw", prfOutput.slice(), "HKDF", false, [
+      "deriveKey",
+    ]);
+    return await crypto.subtle.deriveKey(
+      {
+        name: "HKDF",
+        hash: "SHA-256",
+        salt: validated.hkdfSalt as BufferSource,
+        info: validated.hkdfInfo as BufferSource,
+      },
+      ikm,
+      { name: "AES-GCM", length: 256 },
+      false,
+      ["encrypt", "decrypt"],
+    );
+  } catch (cause) {
+    if (cause instanceof PasskeyKeyError) throw cause;
+    throw cryptoFailure("failed to derive wrapping key", cause, "deriveWrappingKey");
+  }
+}
+
+function validateCredentialId(credentialId: string): void {
+  if (
+    typeof credentialId !== "string" ||
+    !/^[A-Za-z0-9_-]+$/.test(credentialId) ||
+    credentialId.length % 4 === 1
+  ) {
+    throw invalidInput("credentialId must be unpadded base64url");
+  }
+}
+
+export function validateWrappedKey(
+  wrappedKey: WrappedKey,
+  profile: PasskeyKeyProfile,
+): void {
+  const validated = copyAndValidateProfile(profile);
+  if (!wrappedKey || typeof wrappedKey !== "object") throw invalidInput("wrappedKey is required");
+  if (wrappedKey.version !== 1) throw invalidInput("wrappedKey.version must be 1");
+  if (wrappedKey.profileId !== validated.id) throw invalidInput("wrappedKey profile mismatch");
+  validateCredentialId(wrappedKey.credentialId);
+  if (!/^[0-9a-f]{24}$/.test(wrappedKey.ivHex)) {
+    throw invalidInput("wrappedKey.ivHex must be a lowercase 12-byte hex value");
+  }
+  const expectedCiphertextHexLength = (validated.keyLengthBytes + AES_GCM_TAG_BYTES) * 2;
+  if (!new RegExp(`^[0-9a-f]{${expectedCiphertextHexLength}}$`).test(wrappedKey.ciphertextHex)) {
+    throw invalidInput("wrappedKey.ciphertextHex has an invalid format or length");
+  }
+}
+
+export async function wrapKey(input: {
+  profile: PasskeyKeyProfile;
+  credentialId: string;
+  wrappingKey: CryptoKey;
+  keyMaterial: Uint8Array;
+}): Promise<WrappedKey> {
+  const profile = copyAndValidateProfile(input.profile);
+  validateCredentialId(input.credentialId);
+  assertBytes(input.keyMaterial, "keyMaterial");
+  if (input.keyMaterial.length !== profile.keyLengthBytes) {
+    throw invalidInput(`keyMaterial must be ${profile.keyLengthBytes} bytes`, "wrapKey");
+  }
+  try {
+    const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
+    const ciphertext = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv: iv as BufferSource },
+      input.wrappingKey,
+      input.keyMaterial as BufferSource,
+    );
+    return {
+      version: 1,
+      profileId: profile.id,
+      credentialId: input.credentialId,
+      ivHex: bytesToHex(iv),
+      ciphertextHex: bytesToHex(new Uint8Array(ciphertext)),
+    };
+  } catch (cause) {
+    if (cause instanceof PasskeyKeyError) throw cause;
+    throw cryptoFailure("failed to wrap key material", cause, "wrapKey");
+  }
+}
+
+export async function unwrapKey(input: {
+  profile: PasskeyKeyProfile;
+  wrappingKey: CryptoKey;
+  wrappedKey: WrappedKey;
+}): Promise<Uint8Array> {
+  const profile = copyAndValidateProfile(input.profile);
+  validateWrappedKey(input.wrappedKey, profile);
+  try {
+    const plaintext = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv: hexToBytes(input.wrappedKey.ivHex) as BufferSource },
+      input.wrappingKey,
+      hexToBytes(input.wrappedKey.ciphertextHex) as BufferSource,
+    );
+    const result = new Uint8Array(plaintext);
+    if (result.length !== profile.keyLengthBytes) throw new Error("wrong plaintext length");
+    return result;
+  } catch (cause) {
+    if (cause instanceof PasskeyKeyError) throw cause;
+    throw cryptoFailure("failed to unwrap key material", cause, "unwrapKey");
+  }
+}
+
+export async function deriveStableKeyId(
+  keyMaterial: Uint8Array,
+  options: { salt?: Uint8Array; info?: Uint8Array; lengthBytes?: number } = {},
+): Promise<Uint8Array> {
+  assertBytes(keyMaterial, "keyMaterial");
+  const salt = options.salt ?? new Uint8Array();
+  const info = options.info ?? DEFAULT_STABLE_ID_INFO;
+  const lengthBytes = options.lengthBytes ?? DEFAULT_STABLE_ID_BYTES;
+  assertBytes(salt, "salt", true);
+  assertBytes(info, "info");
+  if (!Number.isSafeInteger(lengthBytes) || lengthBytes <= 0) {
+    throw invalidInput("lengthBytes must be a positive integer", "deriveStableKeyId");
+  }
+  try {
+    const ikm = await crypto.subtle.importKey("raw", keyMaterial.slice(), "HKDF", false, [
+      "deriveBits",
+    ]);
+    const bits = await crypto.subtle.deriveBits(
+      {
+        name: "HKDF",
+        hash: "SHA-256",
+        salt: salt.slice() as BufferSource,
+        info: info.slice() as BufferSource,
+      },
+      ikm,
+      lengthBytes * 8,
+    );
+    return new Uint8Array(bits);
+  } catch (cause) {
+    throw cryptoFailure("failed to derive stable key id", cause, "deriveStableKeyId");
+  }
 }

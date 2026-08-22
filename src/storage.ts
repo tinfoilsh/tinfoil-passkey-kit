@@ -1,69 +1,132 @@
-/**
- * Pluggable local persistence for the SDK's device-side state: the cached
- * PRF output and the credential id this device owns. Adapters are
- * synchronous by design (mirroring the Web Storage API) so callers can
- * read cached state without awaiting.
- *
- * SECURITY: the PRF output cached through an adapter is raw key material —
- * anyone who can read it can re-derive the KEK and unwrap the CEK. The
- * default `localStorage` adapter stores it in plaintext, which is only as
- * strong as the origin's script-injection defenses (an XSS attacker could
- * equally just run the ceremony or exfiltrate decrypted data). Hosts with
- * stricter requirements should supply their own adapter with at-rest
- * protection, or pass `storage: null` to disable caching and re-prompt
- * biometrics instead.
- */
+import { base64ToBytes, bytesToBase64 } from "./codec.js";
 
-export interface StorageAdapter {
-  getItem(key: string): string | null
-  setItem(key: string, value: string): void
-  removeItem(key: string): void
+export interface StoreKey {
+  rpId: string;
+  profileId: string;
+  credentialId: string;
 }
 
-/**
- * Default adapter backed by `window.localStorage`. Every operation is
- * best-effort: quota errors, privacy-mode failures, blocked-storage
- * contexts (e.g. sandboxed frames, where even touching `localStorage`
- * throws), and SSR (no window) all degrade to no-ops so storage problems
- * never interrupt a passkey ceremony.
- */
-export const browserLocalStorageAdapter: StorageAdapter = {
-  getItem(key: string): string | null {
-    try {
-      if (typeof localStorage === 'undefined') return null
-      return localStorage.getItem(key)
-    } catch {
-      return null
-    }
-  },
-  setItem(key: string, value: string): void {
-    try {
-      if (typeof localStorage === 'undefined') return
-      localStorage.setItem(key, value)
-    } catch {
-      // best-effort
-    }
-  },
-  removeItem(key: string): void {
-    try {
-      if (typeof localStorage === 'undefined') return
-      localStorage.removeItem(key)
-    } catch {
-      // best-effort
-    }
-  },
+export interface CredentialMetadata extends StoreKey {
+  isPlatformAuthenticator: boolean;
 }
 
-/** In-memory adapter for tests and non-browser environments. */
-export function createMemoryStorageAdapter(): StorageAdapter {
-  const store = new Map<string, string>()
+export interface SecretStore {
+  load(key: StoreKey): Promise<Uint8Array | null>;
+  list(namespace: Pick<StoreKey, "rpId" | "profileId">): Promise<string[]>;
+  save(key: StoreKey, secret: Uint8Array): Promise<void>;
+  remove(key: StoreKey): Promise<void>;
+  clear(namespace: Pick<StoreKey, "rpId" | "profileId">): Promise<void>;
+}
+
+export interface CredentialStore {
+  load(key: StoreKey): Promise<CredentialMetadata | null>;
+  save(metadata: CredentialMetadata): Promise<void>;
+  remove(key: StoreKey): Promise<void>;
+  clear(namespace: Pick<StoreKey, "rpId" | "profileId">): Promise<void>;
+}
+
+function storageKey(key: StoreKey): string {
+  return [key.rpId, key.profileId, key.credentialId]
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+}
+
+function namespacePrefix(namespace: Pick<StoreKey, "rpId" | "profileId">): string {
+  return `${encodeURIComponent(namespace.rpId)}/${encodeURIComponent(namespace.profileId)}/`;
+}
+
+export function createMemorySecretStore(): SecretStore {
+  const values = new Map<string, Uint8Array>();
   return {
-    getItem: (key) => store.get(key) ?? null,
-    setItem: (key, value) => {
-      store.set(key, value)
+    async load(key) {
+      return values.get(storageKey(key))?.slice() ?? null;
     },
-    removeItem: (key) => {
-      store.delete(key)
+    async list(namespace) {
+      const prefix = namespacePrefix(namespace);
+      return [...values.keys()]
+        .filter((key) => key.startsWith(prefix))
+        .map((key) => decodeURIComponent(key.slice(prefix.length)));
     },
-  }
+    async save(key, secret) {
+      values.set(storageKey(key), secret.slice());
+    },
+    async remove(key) {
+      values.delete(storageKey(key));
+    },
+    async clear(namespace) {
+      const prefix = namespacePrefix(namespace);
+      for (const key of values.keys()) if (key.startsWith(prefix)) values.delete(key);
+    },
+  };
+}
+
+export function createMemoryCredentialStore(): CredentialStore {
+  const values = new Map<string, CredentialMetadata>();
+  return {
+    async load(key) {
+      const value = values.get(storageKey(key));
+      return value ? { ...value } : null;
+    },
+    async save(metadata) {
+      values.set(storageKey(metadata), { ...metadata });
+    },
+    async remove(key) {
+      values.delete(storageKey(key));
+    },
+    async clear(namespace) {
+      const prefix = namespacePrefix(namespace);
+      for (const key of values.keys()) if (key.startsWith(prefix)) values.delete(key);
+    },
+  };
+}
+
+/**
+ * Stores raw PRF output in browser localStorage without encryption. This is
+ * insecure against same-origin script access and must be explicitly enabled.
+ */
+export function createInsecureBrowserLocalStorageSecretStore(
+  prefix = "passkey-key-secret/",
+): SecretStore {
+  const fullKey = (key: StoreKey) => `${prefix}${storageKey(key)}`;
+  return {
+    async load(key) {
+      try {
+        if (typeof localStorage === "undefined") return null;
+        const value = localStorage.getItem(fullKey(key));
+        return value === null ? null : base64ToBytes(value);
+      } catch {
+        return null;
+      }
+    },
+    async list(namespace) {
+      if (typeof localStorage === "undefined") return [];
+      const scopedPrefix = `${prefix}${namespacePrefix(namespace)}`;
+      const credentialIds: string[] = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key?.startsWith(scopedPrefix)) {
+          credentialIds.push(decodeURIComponent(key.slice(scopedPrefix.length)));
+        }
+      }
+      return credentialIds;
+    },
+    async save(key, secret) {
+      if (typeof localStorage === "undefined") return;
+      localStorage.setItem(fullKey(key), bytesToBase64(secret));
+    },
+    async remove(key) {
+      if (typeof localStorage === "undefined") return;
+      localStorage.removeItem(fullKey(key));
+    },
+    async clear(namespace) {
+      if (typeof localStorage === "undefined") return;
+      const scopedPrefix = `${prefix}${namespacePrefix(namespace)}`;
+      const keys: string[] = [];
+      for (let index = 0; index < localStorage.length; index += 1) {
+        const key = localStorage.key(index);
+        if (key?.startsWith(scopedPrefix)) keys.push(key);
+      }
+      for (const key of keys) localStorage.removeItem(key);
+    },
+  };
 }

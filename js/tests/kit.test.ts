@@ -1,437 +1,206 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { bytesToBase64Url } from "../../src/codec.js";
-import { CEK_BYTES } from "../../src/crypto.js";
-import { PasskeyTimeoutError, PrfNotSupportedError } from "../../src/errors.js";
-import { createPasskeyKit } from "../../src/kit.js";
-import { createMemoryStorageAdapter } from "../../src/storage.js";
+import { bufferSourceToArrayBuffer, bytesToBase64Url } from "../../src/codec.js";
+import { createPasskeyKeyManager } from "../../src/kit.js";
+import { createMemorySecretStore } from "../../src/storage.js";
+import type { PasskeyKeyProfile } from "../../src/types.js";
 
 const originalCredentials = navigator.credentials;
-const TEST_STUCK_TIMEOUT_MS = 10_000;
+const encoder = new TextEncoder();
+const profile: PasskeyKeyProfile = {
+  id: "test-v1",
+  prfInput: encoder.encode("test-prf"),
+  hkdfSalt: new Uint8Array(),
+  hkdfInfo: encoder.encode("test-kek"),
+  keyLengthBytes: 32,
+};
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   Object.defineProperty(navigator, "credentials", {
     value: originalCredentials,
-    writable: true,
     configurable: true,
   });
 });
 
-function installCredentialsMock(stub: {
-  create?: (...args: unknown[]) => unknown;
-  get?: (...args: unknown[]) => unknown;
-}): void {
+function installCredentials(credentials: Partial<CredentialsContainer>): void {
   Object.defineProperty(navigator, "credentials", {
-    value: stub,
-    writable: true,
+    value: credentials,
     configurable: true,
   });
 }
 
-function fakeCredential(options: {
-  rawId?: ArrayBuffer;
-  prfEnabled?: boolean;
-  prfFirst?: ArrayBuffer | null;
-  attachment?: string | null;
-}): PublicKeyCredential {
-  const rawId =
-    options.rawId ??
-    (crypto.getRandomValues(new Uint8Array(16)).buffer as ArrayBuffer);
+function credential(options: {
+  rawId?: Uint8Array;
+  prf?: Uint8Array;
+  enabled?: boolean;
+  attachment?: AuthenticatorAttachment;
+} = {}): PublicKeyCredential {
+  const rawId = options.rawId ?? new Uint8Array([1, 2, 3]);
   return {
-    rawId,
-    authenticatorAttachment: options.attachment ?? null,
-    getClientExtensionResults: () => {
-      if (!options.prfEnabled && !options.prfFirst) return {};
-      const prf: { enabled?: boolean; results?: { first: ArrayBuffer } } = {};
-      if (options.prfEnabled) prf.enabled = true;
-      if (options.prfFirst) prf.results = { first: options.prfFirst };
-      return { prf };
-    },
+    rawId: rawId.buffer,
+    authenticatorAttachment: options.attachment ?? "platform",
+    getClientExtensionResults: () => ({
+      prf: {
+        enabled: options.enabled ?? true,
+        results: options.prf ? { first: options.prf.buffer } : undefined,
+      },
+    }),
   } as unknown as PublicKeyCredential;
 }
 
-function makeKit(storage = createMemoryStorageAdapter()) {
-  return {
-    kit: createPasskeyKit({
-      rpId: "example.com",
-      rpName: "Example",
-      storage,
-    }),
-    storage,
-  };
+function manager(options: { timeoutMs?: number; secretStore?: ReturnType<typeof createMemorySecretStore> } = {}) {
+  return createPasskeyKeyManager({
+    rpId: "example.com",
+    rpName: "Example",
+    profile,
+    ...options,
+  });
 }
 
-describe("createPasskey", () => {
-  it("returns the PRF result and caches it when creation yields PRF output", async () => {
-    const prfFirst = crypto.getRandomValues(new Uint8Array(32))
-      .buffer as ArrayBuffer;
-    const rawId = crypto.getRandomValues(new Uint8Array(16))
-      .buffer as ArrayBuffer;
-    installCredentialsMock({
-      create: vi.fn(async () =>
-        fakeCredential({
-          rawId,
-          prfEnabled: true,
-          prfFirst,
-          attachment: "platform",
-        }),
-      ),
-    });
+const user = { id: new Uint8Array([9, 8, 7]), name: "person@example.com" };
 
-    const { kit } = makeKit();
-    const result = await kit.createPasskey({ id: "u1", name: "u@example.com" });
-
-    expect(result?.credentialId).toBe(bytesToBase64Url(new Uint8Array(rawId)));
-    expect(result?.prfOutput.byteLength).toBe(32);
-
-    const cached = kit.getCachedPrfResult();
-    expect(cached?.credentialId).toBe(result?.credentialId);
-    expect(new Uint8Array(cached!.prfOutput)).toEqual(new Uint8Array(prfFirst));
-    expect(kit.getLocalCredentialId()).toBe(result?.credentialId);
-  });
-
-  it("does not remember the credential id for cross-platform authenticators", async () => {
-    const prfFirst = crypto.getRandomValues(new Uint8Array(32))
-      .buffer as ArrayBuffer;
-    installCredentialsMock({
-      create: vi.fn(async () =>
-        fakeCredential({
-          prfEnabled: true,
-          prfFirst,
-          attachment: "cross-platform",
-        }),
-      ),
-    });
-
-    const { kit } = makeKit();
-    const result = await kit.createPasskey({ id: "u1", name: "u@example.com" });
-    expect(result).not.toBeNull();
-    expect(kit.getLocalCredentialId()).toBeNull();
-    expect(kit.getCachedPrfResult()).not.toBeNull();
-  });
-
-  it("falls back to an immediate assertion when creation reports PRF but no output", async () => {
-    const rawId = crypto.getRandomValues(new Uint8Array(16))
-      .buffer as ArrayBuffer;
-    const prfFirst = crypto.getRandomValues(new Uint8Array(32))
-      .buffer as ArrayBuffer;
-    installCredentialsMock({
-      create: vi.fn(async () =>
-        fakeCredential({ rawId, prfEnabled: true, prfFirst: null }),
-      ),
-      get: vi.fn(async () => fakeCredential({ rawId, prfFirst })),
-    });
-
-    const { kit } = makeKit();
-    const result = await kit.createPasskey({ id: "u1", name: "u@example.com" });
-    expect(result?.credentialId).toBe(bytesToBase64Url(new Uint8Array(rawId)));
-  });
-
-  it("throws PrfNotSupportedError when the authenticator lacks PRF", async () => {
-    installCredentialsMock({
-      create: vi.fn(async () => fakeCredential({ prfEnabled: false })),
-    });
-
-    const { kit } = makeKit();
-    await expect(
-      kit.createPasskey({ id: "u1", name: "u@example.com" }),
-    ).rejects.toBeInstanceOf(PrfNotSupportedError);
-  });
-
-  it("uses a brand-neutral default message and honors errorMessages overrides", async () => {
-    installCredentialsMock({
-      create: vi.fn(async () => fakeCredential({ prfEnabled: false })),
-    });
-
-    const { kit } = makeKit();
-    const defaultError = await kit
-      .createPasskey({ id: "u1", name: "u@example.com" })
-      .catch((error: unknown) => error as Error);
-    expect((defaultError as Error).message).toContain("this app");
-
-    const branded = createPasskeyKit({
+describe("profile and storage", () => {
+  it("defensively copies profile and user handle inputs", async () => {
+    const mutableProfile = { ...profile, prfInput: profile.prfInput.slice() };
+    const keyManager = createPasskeyKeyManager({
       rpId: "example.com",
       rpName: "Example",
-      storage: createMemoryStorageAdapter(),
-      errorMessages: { prfNotSupported: "Example App needs PRF support." },
+      profile: mutableProfile,
     });
-    const brandedError = await branded
-      .createPasskey({ id: "u1", name: "u@example.com" })
-      .catch((error: unknown) => error as Error);
-    expect(brandedError).toBeInstanceOf(PrfNotSupportedError);
-    expect((brandedError as Error).message).toBe(
-      "Example App needs PRF support.",
-    );
+    mutableProfile.prfInput[0] = 0;
+    const exposed = keyManager.profile;
+    exposed.hkdfInfo[0] = 0;
+    expect(keyManager.profile.prfInput).toEqual(profile.prfInput);
+    expect(keyManager.profile.hkdfInfo).toEqual(profile.hkdfInfo);
+
+    const create = vi.fn(async (options: CredentialCreationOptions) => {
+      const request = options.publicKey!;
+      expect(new Uint8Array(bufferSourceToArrayBuffer(request.user.id))).toEqual(
+        new Uint8Array([9, 8, 7]),
+      );
+      return credential({ prf: new Uint8Array(32) });
+    });
+    installCredentials({ create } as Partial<CredentialsContainer>);
+    const handle = user.id.slice();
+    const pending = keyManager.createCredential({ ...user, id: handle });
+    handle[0] = 0;
+    await pending;
   });
 
-  it("honors the errorMessages timeout override when the provider hangs", async () => {
-    vi.useFakeTimers();
-    installCredentialsMock({ create: vi.fn(() => new Promise(() => {})) });
+  it("stores nothing by default and enables cache only with an explicit secret store", async () => {
+    const prf = new Uint8Array(32).fill(3);
+    installCredentials({ create: vi.fn(async () => credential({ prf })) });
+    const withoutStore = manager();
+    const enrolled = await withoutStore.enrollKey({ user });
+    await expect(withoutStore.unlockKeyFromCache([enrolled.wrappedKey])).resolves.toBeNull();
 
-    const kit = createPasskeyKit({
-      rpId: "example.com",
-      rpName: "Example",
-      storage: createMemoryStorageAdapter(),
-      errorMessages: { timeout: "Example App timed out." },
-      stuckTimeoutMs: TEST_STUCK_TIMEOUT_MS,
+    const secretStore = createMemorySecretStore();
+    const withStore = manager({ secretStore });
+    const cachedEnrollment = await withStore.enrollKey({ user });
+    await expect(withStore.unlockKeyFromCache([cachedEnrollment.wrappedKey])).resolves.toMatchObject({
+      credentialId: cachedEnrollment.credentialId,
     });
-    const promise = kit.createPasskey({ id: "u1", name: "u@example.com" });
-    promise.catch(() => {});
-    await vi.advanceTimersByTimeAsync(15_000);
-    await expect(promise).rejects.toMatchObject({
-      name: "PasskeyTimeoutError",
-      message: "Example App timed out.",
-    });
+    await expect(withStore.rewrapKeyFromCache(new Uint8Array(32))).resolves.not.toBeNull();
   });
+});
 
-  it("returns null when the user cancels", async () => {
-    installCredentialsMock({
-      create: vi.fn(async () => {
-        throw new DOMException("User cancelled", "NotAllowedError");
-      }),
-    });
-
-    const { kit } = makeKit();
-    await expect(
-      kit.createPasskey({ id: "u1", name: "u@example.com" }),
-    ).resolves.toBeNull();
-  });
-
-  it("throws provider errors other than cancellation", async () => {
-    const providerError = new DOMException(
-      "Invalid relying party",
-      "SecurityError",
-    );
-    installCredentialsMock({
-      create: vi.fn(async () => {
-        throw providerError;
-      }),
-    });
-
-    const { kit } = makeKit();
-    await expect(
-      kit.createPasskey({ id: "u1", name: "u@example.com" }),
-    ).rejects.toBe(providerError);
-  });
-
-  it("rejects user handles longer than the WebAuthn limit", async () => {
+describe("ceremony lifecycle", () => {
+  it("rejects an already-aborted signal without starting a ceremony", async () => {
     const create = vi.fn();
-    installCredentialsMock({ create });
-
-    const { kit } = makeKit();
-    await expect(
-      kit.createPasskey({ id: "u".repeat(65), name: "u@example.com" }),
-    ).rejects.toThrow("at most 64 UTF-8 bytes");
+    installCredentials({ create } as Partial<CredentialsContainer>);
+    const controller = new AbortController();
+    controller.abort("stop");
+    await expect(manager().createCredential(user, { signal: controller.signal })).rejects.toMatchObject({
+      code: "cancelledOrUnavailable",
+      operation: "createCredential",
+    });
     expect(create).not.toHaveBeenCalled();
   });
 
-  it("throws PasskeyTimeoutError when the provider hangs", async () => {
+  it("aborts an active ceremony and releases the operation slot", async () => {
+    const create = vi.fn((options: CredentialCreationOptions) =>
+      new Promise((_, reject) => {
+        options.signal?.addEventListener("abort", () => reject(new DOMException("", "AbortError")));
+      }),
+    );
+    installCredentials({ create } as Partial<CredentialsContainer>);
+    const keyManager = manager();
+    const controller = new AbortController();
+    const first = keyManager.createCredential(user, { signal: controller.signal });
+    await expect(keyManager.createCredential(user)).rejects.toMatchObject({
+      code: "operationInProgress",
+    });
+    controller.abort();
+    await expect(first).rejects.toMatchObject({ code: "cancelledOrUnavailable" });
+
+    create.mockResolvedValueOnce(credential({ prf: new Uint8Array(32) }));
+    await expect(keyManager.createCredential(user)).resolves.toBeDefined();
+  });
+
+  it("aborts on timeout, ignores late completion, and permits the next operation", async () => {
     vi.useFakeTimers();
-    installCredentialsMock({ create: vi.fn(() => new Promise(() => {})) });
+    let resolveLate!: (value: PublicKeyCredential) => void;
+    let ceremonySignal: AbortSignal | undefined;
+    const create = vi
+      .fn()
+      .mockImplementationOnce(
+        (options: CredentialCreationOptions) =>
+          new Promise((resolve) => {
+            ceremonySignal = options.signal;
+            resolveLate = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(credential({ prf: new Uint8Array(32) }));
+    installCredentials({ create } as Partial<CredentialsContainer>);
+    const secretStore = createMemorySecretStore();
+    const keyManager = manager({ timeoutMs: 25, secretStore });
+    const first = keyManager.createCredential(user);
+    first.catch(() => {});
+    await vi.advanceTimersByTimeAsync(25);
+    await expect(first).rejects.toMatchObject({ code: "timeout" });
+    expect(ceremonySignal?.aborted).toBe(true);
+    resolveLate(credential({ prf: new Uint8Array(32).fill(9) }));
+    await Promise.resolve();
+    await expect(
+      secretStore.list({ rpId: "example.com", profileId: profile.id }),
+    ).resolves.toEqual([]);
+    await expect(keyManager.createCredential(user)).resolves.toBeDefined();
+  });
 
-    const kit = createPasskeyKit({
-      rpId: "example.com",
-      rpName: "Example",
-      storage: createMemoryStorageAdapter(),
-      stuckTimeoutMs: TEST_STUCK_TIMEOUT_MS,
+  it("reports NotAllowedError honestly", async () => {
+    installCredentials({
+      create: vi.fn(async () => {
+        throw new DOMException("", "NotAllowedError");
+      }),
     });
-    const promise = kit.createPasskey({ id: "u1", name: "u@example.com" });
-    promise.catch(() => {});
-    await vi.advanceTimersByTimeAsync(15_000);
-    await expect(promise).rejects.toBeInstanceOf(PasskeyTimeoutError);
+    await expect(manager().createCredential(user)).rejects.toMatchObject({
+      code: "cancelledOrUnavailable",
+    });
   });
 });
 
-describe("enroll and unlock", () => {
-  /**
-   * Install a PRF-capable credentials mock and enroll a fresh CEK on a new
-   * kit. Returns the `get` spy so tests can assert whether a ceremony ran.
-   */
-  async function enrollWithMock() {
-    const rawId = crypto.getRandomValues(new Uint8Array(16))
-      .buffer as ArrayBuffer;
-    const prfFirst = crypto.getRandomValues(new Uint8Array(32))
-      .buffer as ArrayBuffer;
-    const get = vi.fn(async () =>
-      fakeCredential({ rawId, prfFirst: prfFirst.slice(0) }),
-    );
-    installCredentialsMock({
-      create: vi.fn(async () =>
-        fakeCredential({
-          rawId,
-          prfEnabled: true,
-          prfFirst: prfFirst.slice(0),
-        }),
-      ),
-      get,
+describe("unlock behavior", () => {
+  it("orders the preferred credential first", async () => {
+    const get = vi.fn(async (options: CredentialRequestOptions) => {
+      const ids = options.publicKey!.allowCredentials!.map((item) =>
+        bytesToBase64Url(new Uint8Array(bufferSourceToArrayBuffer(item.id))),
+      );
+      expect(ids).toEqual(["Ag", "AQ"]);
+      return credential({ rawId: new Uint8Array([2]), prf: new Uint8Array(32) });
     });
+    installCredentials({ get } as Partial<CredentialsContainer>);
+    await manager().evaluateCredential(["AQ", "Ag"], { preferredCredentialId: "Ag" });
+  });
 
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const { kit } = makeKit();
-    const enrolled = await kit.enroll({
-      user: { id: "u1", name: "u@example.com" },
-      cek,
+  it("allows unlock attempts when platform enrollment is unavailable", async () => {
+    installCredentials({ get: vi.fn() } as Partial<CredentialsContainer>);
+    vi.stubGlobal("PublicKeyCredential", {
+      isUserVerifyingPlatformAuthenticatorAvailable: vi.fn(async () => false),
     });
-    expect(enrolled).not.toBeNull();
-    return { kit, cek, enrolled: enrolled!, get };
-  }
-
-  it("round-trips a CEK through enroll → unlock", async () => {
-    const { kit, cek, enrolled } = await enrollWithMock();
-    expect(enrolled.wrappedCek.credentialId).toBe(enrolled.credentialId);
-
-    const unlocked = await kit.unlock([enrolled.wrappedCek]);
-    expect(unlocked?.credentialId).toBe(enrolled.credentialId);
-    expect(unlocked?.cek).toEqual(cek);
-  });
-
-  it("returns null from unlock when there is nothing to unwrap", async () => {
-    const { kit } = makeKit();
-    await expect(kit.unlock([])).resolves.toBeNull();
-  });
-
-  it("rewraps with the cached PRF output without prompting", async () => {
-    const { kit, enrolled, get } = await enrollWithMock();
-
-    const newCek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    const rewrapped = await kit.rewrapWithCachedPrf(newCek);
-    expect(rewrapped).not.toBeNull();
-    expect(get).not.toHaveBeenCalled();
-
-    const unlocked = await kit.unlock([rewrapped!]);
-    expect(unlocked?.cek).toEqual(newCek);
-    expect(enrolled.credentialId).toBe(rewrapped!.credentialId);
-  });
-
-  it("returns null from rewrapWithCachedPrf when nothing is cached", async () => {
-    const { kit } = makeKit();
-    const cek = crypto.getRandomValues(new Uint8Array(CEK_BYTES));
-    await expect(kit.rewrapWithCachedPrf(cek)).resolves.toBeNull();
-  });
-
-  it("unlocks with the cached PRF output without prompting", async () => {
-    const { kit, cek, enrolled, get } = await enrollWithMock();
-
-    const unlocked = await kit.unlockWithCachedPrf([enrolled.wrappedCek]);
-    expect(unlocked?.credentialId).toBe(enrolled.credentialId);
-    expect(unlocked?.cek).toEqual(cek);
-    expect(get).not.toHaveBeenCalled();
-  });
-
-  it("returns null from unlockWithCachedPrf when nothing is cached or nothing matches", async () => {
-    const stranger = {
-      credentialId: "someone-else",
-      kekIvHex: "00".repeat(12),
-      wrappedKeyHex: "00".repeat(48),
-    };
-
-    const { kit: emptyKit } = makeKit();
-    await expect(emptyKit.unlockWithCachedPrf([stranger])).resolves.toBeNull();
-
-    const { kit } = await enrollWithMock();
-    await expect(kit.unlockWithCachedPrf([stranger])).resolves.toBeNull();
-  });
-
-  it("returns null from unlockWithCachedPrf when the wrapped CEK is tampered", async () => {
-    const { kit, enrolled } = await enrollWithMock();
-
-    const tampered = {
-      ...enrolled.wrappedCek,
-      wrappedKeyHex: "00".repeat(48),
-    };
-    await expect(kit.unlockWithCachedPrf([tampered])).resolves.toBeNull();
-  });
-
-  it("rewraps with the cached PRF output when destructured off the kit", async () => {
-    const { kit, cek, enrolled } = await enrollWithMock();
-
-    const { rewrapWithCachedPrf } = kit;
-    const rewrapped = await rewrapWithCachedPrf(cek);
-    expect(rewrapped?.credentialId).toBe(enrolled.credentialId);
-  });
-});
-
-describe("local state", () => {
-  it("clearLocalState removes the PRF cache and local credential id", async () => {
-    const prfFirst = crypto.getRandomValues(new Uint8Array(32))
-      .buffer as ArrayBuffer;
-    installCredentialsMock({
-      create: vi.fn(async () =>
-        fakeCredential({ prfEnabled: true, prfFirst, attachment: "platform" }),
-      ),
-    });
-
-    const { kit } = makeKit();
-    await kit.createPasskey({ id: "u1", name: "u@example.com" });
-    expect(kit.getCachedPrfResult()).not.toBeNull();
-    expect(kit.getLocalCredentialId()).not.toBeNull();
-
-    kit.clearLocalState();
-    expect(kit.getCachedPrfResult()).toBeNull();
-    expect(kit.getLocalCredentialId()).toBeNull();
-  });
-
-  it("operates without persistence when storage is null", async () => {
-    const prfFirst = crypto.getRandomValues(new Uint8Array(32))
-      .buffer as ArrayBuffer;
-    installCredentialsMock({
-      create: vi.fn(async () =>
-        fakeCredential({ prfEnabled: true, prfFirst, attachment: "platform" }),
-      ),
-    });
-
-    const kit = createPasskeyKit({
-      rpId: "example.com",
-      rpName: "Example",
-      storage: null,
-    });
-    const result = await kit.createPasskey({ id: "u1", name: "u@example.com" });
-    expect(result).not.toBeNull();
-    expect(kit.getCachedPrfResult()).toBeNull();
-    expect(kit.getLocalCredentialId()).toBeNull();
-  });
-
-  it("does not discard the ceremony result when a custom adapter throws", async () => {
-    const prfFirst = crypto.getRandomValues(new Uint8Array(32))
-      .buffer as ArrayBuffer;
-    installCredentialsMock({
-      create: vi.fn(async () =>
-        fakeCredential({ prfEnabled: true, prfFirst, attachment: "platform" }),
-      ),
-    });
-
-    const kit = createPasskeyKit({
-      rpId: "example.com",
-      rpName: "Example",
-      storage: {
-        getItem: () => null,
-        setItem: () => {
-          throw new Error("storage is broken");
-        },
-        removeItem: () => {},
-      },
-    });
-    const result = await kit.createPasskey({ id: "u1", name: "u@example.com" });
-    expect(result).not.toBeNull();
-  });
-
-  it("authenticate([]) resolves null without opening a passkey prompt", async () => {
-    const get = vi.fn();
-    installCredentialsMock({ get });
-
-    const { kit } = makeKit();
-    await expect(kit.authenticate([])).resolves.toBeNull();
-    expect(get).not.toHaveBeenCalled();
-  });
-
-  it("throws when authentication returns no PRF output", async () => {
-    installCredentialsMock({
-      get: vi.fn(async () => fakeCredential({})),
-    });
-
-    const { kit } = makeKit();
-    await expect(kit.authenticate(["AQ"])).rejects.toBeInstanceOf(
-      PrfNotSupportedError,
-    );
+    const keyManager = manager();
+    await expect(keyManager.canEnrollPlatformPasskey()).resolves.toBe(false);
+    await expect(keyManager.canAttemptPasskeyUnlock()).resolves.toBe(true);
   });
 });
