@@ -30,13 +30,17 @@ general WebAuthn support.
 | --- | --- | --- |
 | iOS | 18.0 | Platform, synced, and cross-device passkey recovery |
 | macOS | 15.0 | Platform, synced, and cross-device passkey recovery |
-| iOS | 26.4 | Adds explicit security-key PRF requests |
-| macOS | 26.4 | Adds explicit security-key PRF requests |
 
 Apple apps need the `webcredentials` associated-domain entitlement and a valid
 `apple-app-site-association` file. Apple does not provide reliable PRF preflight
 for every flow, so capability may be `unknown`; allow the ceremony and handle
-its result.
+its result. The host must also provide an active `UIWindow` or `NSWindow`
+through `PasskeyPresentationAnchorProviding` so AuthenticationServices can
+present interactive ceremonies.
+
+Explicit security-key PRF requests are not enabled because the baseline
+toolchain does not provide that API. Browsers may support security-key or hybrid
+recovery.
 
 Simulator and unit tests do not establish real PRF support. Manually test at
 least enrollment, same-device recovery, synced or hybrid recovery, cancellation,

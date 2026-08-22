@@ -1,18 +1,18 @@
 # Wrapped Key Repository Example
 
-Applications own wrapped-record persistence. A repository can be as small as:
+Applications own wrapped-record persistence. Store the canonical record emitted
+by the package rather than serializing `Uint8Array` values directly:
 
 ```ts
-import type { WrappedKey } from "@tinfoilsh/passkey-kit";
-
 interface WrappedKeyRepository {
-  save(wrappedKey: WrappedKey): Promise<void>;
-  list(): Promise<WrappedKey[]>;
+  save(record: string): Promise<void>;
+  list(): Promise<string[]>;
 }
 ```
 
-The [web example](../Examples/Web/main.js) and
+Use `encodeWrappedKeyRecord` before saving and `decodeWrappedKeyRecord` after
+loading. The [web example](../Examples/Web/main.js) and
 [Apple example](../Examples/Apple/Sources/PasskeyKeyAppleExample/PasskeyKeyExample.swift)
 provide in-memory implementations. Production repositories must scope records
-to the application's account model and preserve the full profile. This
-interface is an application example, not part of the core package API.
+to the application's account model. This interface is an application example,
+not part of the core package API.

@@ -1,8 +1,9 @@
 # Web example
 
 This static example generates a 32-byte key, enrolls a PRF-capable passkey,
-stores the wrapped record in memory, and recovers the key. It demonstrates key
-wrapping, not login or server authentication.
+stores its canonical record in memory, recovers the key, and exposes advanced
+PRF evaluation. It demonstrates key wrapping, not login or server
+authentication.
 
 First replace the profile's `example.com` relying-party ID in `main.js` with
 `localhost`. Then build the root package and serve the repository:
