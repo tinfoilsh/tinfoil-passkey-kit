@@ -79,19 +79,46 @@ profile override per call. The conceptual surface is:
 
 ```ts
 type PasskeyInteraction = "interactive" | "immediatelyAvailable";
+type PasskeyCapability = "supported" | "unsupported" | "unknown";
+
+interface PasskeyUser {
+  id: string;
+  name: string;
+  displayName?: string;
+}
+
+interface PRFResult {
+  output: Uint8Array;
+}
+
+interface CreateAndWrapKeyInput {
+  user: PasskeyUser;
+  keyMaterial: Uint8Array;
+}
+
+interface CreatedWrappedKey {
+  credentialId: string;
+  wrappedKey: WrappedKey;
+  prfResult: PRFResult;
+}
 
 interface RecoverKeyInput {
   wrappedKeys: WrappedKey[];
   interaction?: PasskeyInteraction;
 }
 
+interface RecoveredKey {
+  credentialId: string;
+  keyMaterial: Uint8Array;
+}
+
+interface RewrapKeyInput {
+  keyMaterial: Uint8Array;
+}
+
 interface EvaluateCredentialInput {
   credentialIds: string[];
   interaction?: PasskeyInteraction;
-}
-
-interface PRFResult {
-  output: Uint8Array;
 }
 
 interface EvaluatedCredential {
@@ -131,6 +158,12 @@ interface PasskeyKeyManager {
   cancelActiveCeremony(): void;
 }
 ```
+
+`PasskeyUser` matches the existing JavaScript identity model: `id` is the
+stable opaque user handle, `name` is the account identifier shown by the
+passkey provider, and optional `displayName` falls back to `name`. Swift exposes
+equivalent input and result types, using `Data` wherever JavaScript uses
+`Uint8Array`.
 
 Creation accepts passkey user metadata and a 32-byte key, then embeds the
 manager's full profile in the `WrappedKey`. Recovery accepts one or more wrapped

@@ -52,9 +52,10 @@ The kit also provides cached unlock and rewrap flows. Lower-level exports
 include `detectPrfSupport`, `deriveKeyEncryptionKey`, `generateCek`,
 `isValidCek`, `wrapCek`, `unwrapCek`, and `deriveKeyId`.
 
-The default storage adapter uses `localStorage` on a best-effort basis. Pass
-`storage: null` to disable persistence or provide a custom `StorageAdapter`.
-Cached PRF output is raw secret key material and must be protected accordingly.
+Persistence is disabled by default. Hosts may explicitly opt in to the browser
+local-storage adapter or provide a custom adapter. The browser adapter is
+insecure because same-origin scripts can read cached PRF output, which is raw
+secret key material.
 
 ## Swift
 
@@ -91,10 +92,10 @@ func configurePasskeyKit() async throws {
 }
 ```
 
-`KeychainPasskeyStateStore` stores cached PRF output with
-`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Pass `stateStore: nil` to
-disable local persistence. The host app must provide the `webcredentials`
-associated-domain entitlement for its relying-party domain.
+The optional `KeychainPasskeyStateStore` stores cached PRF output with
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. No state store is selected by
+default. The host app must provide the `webcredentials` associated-domain
+entitlement for its relying-party domain.
 
 ## Protocol
 
