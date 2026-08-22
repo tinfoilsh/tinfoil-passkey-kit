@@ -16,6 +16,11 @@ Storage is explicit opt-in and synchronous in v0.2; synchronous access does not
 make the stored secret safer. Each cached result carries a full profile snapshot
 so the manager can reject state from another derivation domain.
 
+The advanced `evaluateCredential` API returns raw PRF output to host code. That
+output can rederive the KEK and recover matching wrapped keys. It must not be
+logged, sent to a server, or retained without protections equivalent to key
+material. High-level applications should prefer `recoverKey`.
+
 ## Challenge limitation
 
 The kit generates a fresh random challenge locally. This prevents accidental
@@ -29,6 +34,10 @@ server-verifiable WebAuthn login assertion.
 - PRF caching removes the user-verification prompt from cache-only recovery.
   Anyone who reads the cache and wrapped record can attempt offline recovery.
   Storage is opt-in and should use platform protection appropriate to the app.
+- The optional browser local-storage adapter stores PRF output where same-origin
+  JavaScript can read it and is explicitly insecure. The optional Keychain
+  adapter uses device-local protection, but a compromised application or device
+  remains in the trust boundary. Neither adapter is enabled by default.
 - JavaScript cannot protect keys from script executing in the same origin. XSS
   can read cached material, invoke ceremonies, or exfiltrate recovered keys.
 - A compromised device or authenticator can expose keys while they are in use.
@@ -51,11 +60,18 @@ tag appended to the ciphertext, and no additional authenticated data.
 Credential IDs are unpadded base64url. `kekIvHex` and `wrappedKeyHex` are
 lowercase, even-length hexadecimal. The wire record does not carry assertions,
 challenges, PRF output, plaintext keys, or KEKs. A `PasskeyKeyProfile` contains
-exactly the version, relying-party ID and name, PRF salt, and HKDF info. An
-adapter may reconstruct that profile for a legacy record only when the
-application already knows its derivation contract. A manager is bound to one
-profile and rejects wrapped keys or cached PRF results whose full profile does
-not match; callers cannot override the profile for an individual operation.
+exactly the version, relying-party ID, PRF salt, and HKDF info. The
+relying-party name configures ceremony presentation and is not profile identity.
+v0.2 accepts only profile version 1. An adapter may reconstruct that profile for
+a legacy record only when the application already knows its derivation contract.
+A manager is bound to one profile and rejects wrapped keys or cached PRF results
+whose full profile does not match; callers cannot override the profile for an
+individual operation.
+
+The public `WrappedKeyRecord` JSON has exactly `version`, `profile`,
+`credentialId`, `kekIvHex`, and `wrappedKeyHex`. Profile bytes use unpadded
+base64url, while runtime models retain byte arrays. JavaScript and Swift apply
+identical encoding and validation; record and profile versions must both be 1.
 
 This effort retains that layout. It introduces no new cryptographic format,
 server migration, downgrade protocol, compatibility negotiation, or generic

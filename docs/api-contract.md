@@ -11,7 +11,6 @@ follows platform conventions, but names and behavior remain recognizable.
 interface PasskeyKeyProfile {
   version: number;
   relyingPartyId: string;
-  relyingPartyName: string;
   prfSalt: Uint8Array;
   hkdfInfo: Uint8Array;
 }
@@ -25,20 +24,52 @@ interface WrappedKey {
 ```
 
 Swift uses `Data` for byte values and otherwise exposes the same properties.
-The profile contains exactly `version`, relying-party ID and name, PRF salt,
-and HKDF info. Its values select the derivation contract and are not secret.
-The first public scope accepts exactly 32 key bytes. The initial Tinfoil profile
-retains the current PRF salt, HKDF info, AES-GCM, and hexadecimal field layout.
+The profile contains exactly `version`, relying-party ID, PRF salt, and HKDF
+info. Its values select the cryptographic domain and are not secret. v0.2
+supports exactly profile version `1` and rejects any other version with
+`invalid_input`. The first public scope accepts exactly 32 key bytes. The
+initial Tinfoil profile retains the current PRF salt, HKDF info, AES-GCM, and
+hexadecimal field layout.
+
+`WrappedKey` is the runtime model. Its profile byte fields remain `Uint8Array`
+in JavaScript and `Data` in Swift. The canonical public JSON model is:
+
+```ts
+interface WrappedKeyRecord {
+  version: 1;
+  profile: {
+    version: 1;
+    relyingPartyId: string;
+    prfSalt: string;
+    hkdfInfo: string;
+  };
+  credentialId: string;
+  kekIvHex: string;
+  wrappedKeyHex: string;
+}
+```
+
+The record has exactly the top-level fields `version`, `profile`,
+`credentialId`, `kekIvHex`, and `wrappedKeyHex`. `prfSalt` and `hkdfInfo` use
+unpadded base64url. `credentialId` remains unpadded base64url; the two hex fields
+remain lowercase. JavaScript and Swift encoders emit this shape and decoders
+apply the same validation. `encodeWrappedKeyRecord` emits UTF-8 JSON with the
+shown key order and no insignificant whitespace. `decodeWrappedKeyRecord`
+accepts insignificant whitespace and any key order, but rejects missing or
+additional fields, invalid encodings, and unsupported versions. Record and
+profile versions must both be `1`. Swift exposes methods with the same names.
 
 ## Manager
 
 JavaScript constructs a manager with exactly one required profile. Swift uses
-`PasskeyKeyManager(profile:storage:)` with the same requirement. Storage remains
-optional in both languages.
+`PasskeyKeyManager(profile:relyingPartyName:storage:)` with the same requirement.
+The relying-party name is required ceremony presentation configuration, not
+part of the cryptographic profile. Storage remains optional in both languages.
 
 ```ts
 declare function createPasskeyKeyManager(input: {
   profile: PasskeyKeyProfile;
+  relyingPartyName: string;
   storage?: PasskeyKeyStorage;
 }): PasskeyKeyManager;
 ```
@@ -47,12 +78,36 @@ Every manager operation uses that profile. No operation accepts a profile or
 profile override per call. The conceptual surface is:
 
 ```ts
+type PasskeyInteraction = "interactive" | "immediatelyAvailable";
+
+interface RecoverKeyInput {
+  wrappedKeys: WrappedKey[];
+  interaction?: PasskeyInteraction;
+}
+
+interface EvaluateCredentialInput {
+  credentialIds: string[];
+  interaction?: PasskeyInteraction;
+}
+
+interface PRFResult {
+  output: Uint8Array;
+}
+
+interface EvaluatedCredential {
+  credentialId: string;
+  prfResult: PRFResult;
+}
+
 interface PasskeyKeyManager {
   capability(input: {
     operation: "enroll" | "recover";
   }): Promise<PasskeyCapability>;
   createAndWrapKey(input: CreateAndWrapKeyInput): Promise<CreatedWrappedKey>;
   recoverKey(input: RecoverKeyInput): Promise<RecoveredKey>;
+  evaluateCredential(
+    input: EvaluateCredentialInput,
+  ): Promise<EvaluatedCredential>;
   recoverKeyFromCache(input: RecoverKeyInput): Promise<RecoveredKey | null>;
   rewrapKeyFromCache(input: RewrapKeyInput): Promise<WrappedKey | null>;
   clearLocalState(): void;
@@ -68,9 +123,21 @@ returns the matched credential ID and recovered key. Cache-only methods never
 start a ceremony and return `null` when no usable matching-profile cache exists.
 Storage failures do not discard a successful ceremony.
 
+`recoverKey` and `evaluateCredential` accept `interaction`, either `interactive`
+or `immediatelyAvailable`; the default is `interactive`. Apple supports both.
+Browsers support only `interactive` and fail an `immediatelyAvailable` request
+with `unsupported`. Passkey creation is always interactive.
+
+`evaluateCredential` is an advanced ceremony API for migrations and custom
+interoperability. It authenticates against supplied credential IDs using the
+manager profile and returns the matched `credentialId` plus a `PRFResult`. Its
+raw `output` is secret key material: callers must avoid logging, transmitting,
+or retaining it longer than necessary. Swift uses `Data` for this output.
+High-level applications should use `recoverKey` instead.
+
 JavaScript uses the names shown above. Swift uses `PasskeyKeyManager`,
 `PasskeyKeyProfile`, and `WrappedKey`, with methods `capability(operation:)`,
-`createAndWrapKey`, `recoverKey`, `recoverKeyFromCache`,
+`createAndWrapKey`, `recoverKey`, `evaluateCredential`, `recoverKeyFromCache`,
 `rewrapKeyFromCache`, `clearLocalState`, and `cancelActiveCeremony`.
 Initialisms follow language style (`prf` in JavaScript and `PRF` where exposed
 in Swift), without changing the underlying concept.
@@ -90,6 +157,13 @@ credential. `recover` checks whether a PRF assertion can be attempted and does
 not require platform attachment; a synced, cross-device, or security-key
 credential may recover a key. The manager profile is implicit and cannot be
 supplied to the capability call.
+
+Assertion interaction support is:
+
+| Platform | `interactive` | `immediatelyAvailable` |
+| --- | --- | --- |
+| Apple | Supported | Supported |
+| Browser | Supported | Unsupported |
 
 ## Errors and lifecycle
 
@@ -144,5 +218,10 @@ These are the five storage methods. None accepts a profile argument. A cached
 PRF result includes the full profile snapshot, and the manager rejects it unless
 that snapshot exactly matches its profile. Swift provides equivalent
 `PasskeyKeyStorage` requirements. These interfaces and examples do not
-prescribe browser, Keychain, hosted, or account storage.
+prescribe hosted or account storage. v0.2 provides optional browser and
+Keychain implementations. The browser local-storage adapter is explicitly
+insecure because same-origin script can read its cached PRF output; the Keychain
+adapter uses device-local protected storage. Neither is selected by default:
+the host must opt in by passing an adapter.
+
 The generic public contract does not expose `deriveStableKeyId`.

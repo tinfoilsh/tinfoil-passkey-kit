@@ -13,10 +13,17 @@ and AES-GCM wrapping needed for that flow.
 - Operation-specific capability reporting for enrollment and recovery.
 - Passkey creation and assertion ceremonies; recovery permits non-platform
   credentials.
+- Interactive assertions on web and Apple; immediately-available assertions on
+  Apple only.
+- An advanced credential-evaluation ceremony for migration and interoperability.
 - Wrapping, recovering, and optionally rewrapping keys with a cached PRF result.
 - Exactly 32-byte keys for the first public scope.
+- Profile version 1 only; other profile versions are rejected.
 - Host-supplied, opt-in synchronous storage for PRF cache and credential
   metadata, with profile snapshots validated by the manager.
+- Optional insecure browser and device-protected Keychain storage adapters;
+  neither is a default.
+- Canonical, cross-platform `WrappedKeyRecord` JSON encoding and decoding.
 - Adapters between generic kit models and existing Tinfoil application records.
 
 ## Out of scope
@@ -28,8 +35,7 @@ and AES-GCM wrapping needed for that flow.
 - Android, server, or non-browser JavaScript support.
 - Feature flags, a new cryptographic wire format, or server data migration.
 - Generic stable-key-ID derivation, including a `deriveStableKeyId` API.
-- Production storage implementations. Storage types and examples define only
-  the integration interface.
+- Hosted or account-backed storage implementations.
 
 The package keeps Tinfoil branding. Its key profile and wrapped-key models are
 vendor-neutral so applications can use the cryptographic contract without
