@@ -112,6 +112,13 @@ The server-persisted wrapped bundle contains only:
 User identity, server persistence, associated-domain configuration, and
 recovery UI remain the host application's responsibility.
 
+## Documentation
+
+- [Scope](docs/scope.md)
+- [API contract](docs/api-contract.md)
+- [Security boundary](docs/security-boundary.md)
+- [Tinfoil integration boundary](docs/tinfoil-integration-boundary.md)
+
 ## License
 
 Apache License 2.0. See [LICENSE](LICENSE).
