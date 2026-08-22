@@ -51,7 +51,7 @@ public final class PasskeyKeyManager {
                 diagnostic: "relying-party name must not be empty"
             )
         }
-        self.profile = profile
+        self.profile = try Self.copy(profile)
         self.relyingPartyName = relyingPartyName
         self.storage = storage
         self.timeout = timeout
@@ -73,11 +73,10 @@ public final class PasskeyKeyManager {
             )
         )
         recordSuccessfulCeremony(result)
-        let wrapped = try KeyWrappingCrypto.wrap(
-            profile: profile,
+        let wrapped = try wrapKeyWithPRFResult(
+            keyMaterial: key,
             credentialId: result.credentialId,
-            prfOutput: result.prfOutput,
-            key: key
+            prfResult: PRFResult(output: result.prfOutput)
         )
         return CreatedWrappedKey(credentialId: result.credentialId, wrappedKey: wrapped)
     }
@@ -100,10 +99,9 @@ public final class PasskeyKeyManager {
                 diagnostic: "credential has no matching wrapped key"
             )
         }
-        let key = try KeyWrappingCrypto.unwrap(
-            profile: profile,
-            prfOutput: result.prfOutput,
-            wrapped: wrapped
+        let key = try unwrapKeyWithPRFResult(
+            wrappedKey: wrapped,
+            prfResult: PRFResult(output: result.prfOutput)
         )
         return RecoveredKey(credentialId: result.credentialId, key: key)
     }
@@ -120,7 +118,43 @@ public final class PasskeyKeyManager {
         )
         return EvaluatedCredential(
             credentialId: result.credentialId,
-            prfResult: PRFResult(output: copy(result.prfOutput))
+            prfResult: PRFResult(output: Self.copy(result.prfOutput))
+        )
+    }
+
+    public func wrapKeyWithPRFResult(
+        keyMaterial: Data,
+        credentialId: String,
+        prfResult: PRFResult
+    ) throws -> WrappedKey {
+        try KeyWrappingCrypto.validateKey(keyMaterial)
+        try KeyWrappingCrypto.validatePRFOutput(prfResult.output)
+        _ = try ByteCodec.base64URLDecode(credentialId)
+        let credentialId = Self.copy(credentialId)
+        return try KeyWrappingCrypto.wrap(
+            profile: Self.copy(profile),
+            credentialId: credentialId,
+            prfOutput: Self.copy(prfResult.output),
+            key: Self.copy(keyMaterial)
+        )
+    }
+
+    public func unwrapKeyWithPRFResult(
+        wrappedKey: WrappedKey,
+        prfResult: PRFResult
+    ) throws -> Data {
+        let wrappedKey = WrappedKey(
+            profile: try Self.copy(wrappedKey.profile),
+            credentialId: wrappedKey.credentialId,
+            kekIvHex: wrappedKey.kekIvHex,
+            wrappedKeyHex: wrappedKey.wrappedKeyHex
+        )
+        try KeyWrappingCrypto.validatePRFOutput(prfResult.output)
+        try KeyWrappingCrypto.validateWrappedKey(wrappedKey, profile: profile)
+        return try KeyWrappingCrypto.unwrap(
+            profile: profile,
+            prfOutput: Self.copy(prfResult.output),
+            wrapped: wrappedKey
         )
     }
 
@@ -138,10 +172,9 @@ public final class PasskeyKeyManager {
         do {
             return RecoveredKey(
                 credentialId: cached.credentialId,
-                key: try KeyWrappingCrypto.unwrap(
-                    profile: profile,
-                    prfOutput: cached.prfOutput,
-                    wrapped: wrapped
+                key: try unwrapKeyWithPRFResult(
+                    wrappedKey: wrapped,
+                    prfResult: PRFResult(output: cached.prfOutput)
                 )
             )
         } catch {
@@ -152,11 +185,10 @@ public final class PasskeyKeyManager {
     public func rewrapKeyFromCache(key: Data) throws -> WrappedKey? {
         try KeyWrappingCrypto.validateKey(key)
         guard let cached = loadCachedResult() else { return nil }
-        return try KeyWrappingCrypto.wrap(
-            profile: profile,
+        return try wrapKeyWithPRFResult(
+            keyMaterial: key,
             credentialId: cached.credentialId,
-            prfOutput: cached.prfOutput,
-            key: key
+            prfResult: PRFResult(output: cached.prfOutput)
         )
     }
 
@@ -330,8 +362,21 @@ public final class PasskeyKeyManager {
         return [preferred] + credentialIds.filter { $0 != preferred }
     }
 
-    private func copy(_ data: Data) -> Data {
+    private static func copy(_ data: Data) -> Data {
         data.withUnsafeBytes { Data($0) }
+    }
+
+    private static func copy(_ string: String) -> String {
+        String(decoding: Data(string.utf8), as: UTF8.self)
+    }
+
+    private static func copy(_ profile: PasskeyKeyProfile) throws -> PasskeyKeyProfile {
+        try PasskeyKeyProfile(
+            version: profile.version,
+            relyingPartyId: profile.relyingPartyId,
+            prfSalt: copy(profile.prfSalt),
+            hkdfInfo: copy(profile.hkdfInfo)
+        )
     }
 
     private func recordSuccessfulCeremony(_ result: CeremonyResult) {

@@ -234,6 +234,115 @@ final class PasskeyKeyManagerTests: XCTestCase {
         }
     }
 
+    func testExplicitPRFMethodsIgnoreCeremoniesAndStorageFailures() throws {
+        let driver = TestCeremonyDriver()
+        let storage = FailingStorage()
+        let manager = try makeManager(driver: driver, storage: storage)
+        let keyMaterial = Data((0..<32).map(UInt8.init))
+        let prfOutput = Data((0..<32).map { UInt8(255 - $0) })
+
+        let wrappedKey = try manager.wrapKeyWithPRFResult(
+            keyMaterial: keyMaterial,
+            credentialId: "AQ",
+            prfResult: PRFResult(output: prfOutput)
+        )
+        let unwrapped = try manager.unwrapKeyWithPRFResult(
+            wrappedKey: wrappedKey,
+            prfResult: PRFResult(output: prfOutput)
+        )
+
+        XCTAssertEqual(unwrapped, keyMaterial)
+        XCTAssertEqual(wrappedKey.profile, profile)
+        XCTAssertTrue(driver.requests.isEmpty)
+        XCTAssertEqual(storage.callCount, 0)
+    }
+
+    func testExplicitPRFMethodsValidateInputs() throws {
+        let manager = try makeManager(driver: TestCeremonyDriver())
+        let prfResult = PRFResult(output: Data(count: 32))
+
+        XCTAssertThrowsError(try manager.wrapKeyWithPRFResult(
+            keyMaterial: Data(count: 31),
+            credentialId: "AQ",
+            prfResult: prfResult
+        ))
+        XCTAssertThrowsError(try manager.wrapKeyWithPRFResult(
+            keyMaterial: Data(count: 32),
+            credentialId: "AB",
+            prfResult: prfResult
+        ))
+        XCTAssertThrowsError(try manager.wrapKeyWithPRFResult(
+            keyMaterial: Data(count: 32),
+            credentialId: "AQ",
+            prfResult: PRFResult(output: Data(count: 31))
+        ))
+
+        let wrappedKey = try manager.wrapKeyWithPRFResult(
+            keyMaterial: Data(count: 32),
+            credentialId: "AQ",
+            prfResult: prfResult
+        )
+        XCTAssertThrowsError(try manager.unwrapKeyWithPRFResult(
+            wrappedKey: wrappedKey,
+            prfResult: PRFResult(output: Data(count: 31))
+        ))
+        let otherProfile = try PasskeyKeyProfile(
+            version: 1,
+            relyingPartyId: profile.relyingPartyId,
+            prfSalt: profile.prfSalt,
+            hkdfInfo: Data("other".utf8)
+        )
+        XCTAssertThrowsError(try manager.unwrapKeyWithPRFResult(
+            wrappedKey: WrappedKey(
+                profile: otherProfile,
+                credentialId: wrappedKey.credentialId,
+                kekIvHex: wrappedKey.kekIvHex,
+                wrappedKeyHex: wrappedKey.wrappedKeyHex
+            ),
+            prfResult: prfResult
+        ))
+
+        var ciphertext = try ByteCodec.hexDecode(wrappedKey.wrappedKeyHex)
+        ciphertext[0] ^= .max
+        XCTAssertThrowsError(try manager.unwrapKeyWithPRFResult(
+            wrappedKey: WrappedKey(
+                profile: wrappedKey.profile,
+                credentialId: wrappedKey.credentialId,
+                kekIvHex: wrappedKey.kekIvHex,
+                wrappedKeyHex: ByteCodec.hexEncode(ciphertext)
+            ),
+            prfResult: prfResult
+        )) { error in
+            guard case PasskeyKeyError.operationFailed = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+    }
+
+    func testExplicitPRFMethodsDoNotInspectActiveCeremony() async throws {
+        let driver = TestCeremonyDriver(behaviors: [.pending])
+        let manager = try makeManager(driver: driver)
+        let ceremony = Task { @MainActor in
+            try await manager.createAndWrapKey(user: user, key: key)
+        }
+        await Task.yield()
+
+        let wrappedKey = try manager.wrapKeyWithPRFResult(
+            keyMaterial: key,
+            credentialId: "AQ",
+            prfResult: PRFResult(output: Data(count: 32))
+        )
+        XCTAssertEqual(wrappedKey.credentialId, "AQ")
+
+        manager.cancelActiveCeremony()
+        do {
+            _ = try await ceremony.value
+            XCTFail("Expected cancellation")
+        } catch {
+            assertCategory(error, .cancelled)
+        }
+    }
+
     func testConcurrentOperationFailsAndCancellationAllowsNextOperation() async throws {
         let driver = TestCeremonyDriver(behaviors: [
             .pending,
@@ -473,9 +582,30 @@ private final class TestCeremonyDriver: CeremonyDriving {
 private final class FailingStorage: PasskeyKeyStorage {
     struct Failure: Error {}
 
-    func loadCachedPRFResult() throws -> CachedPRFResult? { throw Failure() }
-    func saveCachedPRFResult(_ result: CachedPRFResult) throws { throw Failure() }
-    func loadLocalCredentialId() throws -> String? { throw Failure() }
-    func saveLocalCredentialId(_ credentialId: String) throws { throw Failure() }
-    func clear() throws { throw Failure() }
+    private(set) var callCount = 0
+
+    func loadCachedPRFResult() throws -> CachedPRFResult? {
+        callCount += 1
+        throw Failure()
+    }
+
+    func saveCachedPRFResult(_ result: CachedPRFResult) throws {
+        callCount += 1
+        throw Failure()
+    }
+
+    func loadLocalCredentialId() throws -> String? {
+        callCount += 1
+        throw Failure()
+    }
+
+    func saveLocalCredentialId(_ credentialId: String) throws {
+        callCount += 1
+        throw Failure()
+    }
+
+    func clear() throws {
+        callCount += 1
+        throw Failure()
+    }
 }
