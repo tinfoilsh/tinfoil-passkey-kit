@@ -1,7 +1,6 @@
 import type { PasskeyKeyStorage } from "./storage.js";
 
 export interface PasskeyKeyProfile {
-  id: string;
   version: number;
   relyingPartyId: string;
   relyingPartyName: string;
@@ -10,8 +9,7 @@ export interface PasskeyKeyProfile {
 }
 
 export interface WrappedKey {
-  profileId: string;
-  version: number;
+  profile: PasskeyKeyProfile;
   credentialId: string;
   kekIvHex: string;
   wrappedKeyHex: string;
@@ -26,7 +24,6 @@ export interface PasskeyUser {
 export type PasskeyCapability = "supported" | "unsupported" | "unknown";
 
 export interface CreateAndWrapKeyInput {
-  profile: PasskeyKeyProfile;
   user: PasskeyUser;
   key: Uint8Array;
   signal?: AbortSignal;
@@ -38,7 +35,6 @@ export interface CreatedWrappedKey {
 }
 
 export interface RecoverKeyInput {
-  profile: PasskeyKeyProfile;
   wrappedKeys: WrappedKey[];
   preferredCredentialId?: string;
   signal?: AbortSignal;
@@ -50,11 +46,11 @@ export interface RecoveredKey {
 }
 
 export interface RewrapKeyInput {
-  profile: PasskeyKeyProfile;
   key: Uint8Array;
 }
 
 export interface PasskeyKeyManagerConfig {
+  profile: PasskeyKeyProfile;
   timeoutMs?: number;
   storage?: PasskeyKeyStorage;
 }

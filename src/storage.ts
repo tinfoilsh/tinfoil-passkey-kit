@@ -1,37 +1,69 @@
+import { bytesToBase64 } from "./codec.js";
+import type { PasskeyKeyProfile } from "./types.js";
+
 export interface CachedPRFResult {
+  profile: PasskeyKeyProfile;
   credentialId: string;
   prfOutput: Uint8Array;
 }
 
 export interface PasskeyKeyStorage {
-  loadCachedPRFResult(): CachedPRFResult | null;
+  loadCachedPRFResult(profile: PasskeyKeyProfile): CachedPRFResult | null;
   saveCachedPRFResult(result: CachedPRFResult): void;
-  loadLocalCredentialId(): string | null;
-  saveLocalCredentialId(credentialId: string): void;
-  clear(): void;
+  loadLocalCredentialId(profile: PasskeyKeyProfile): string | null;
+  saveLocalCredentialId(profile: PasskeyKeyProfile, credentialId: string): void;
+  clear(profile: PasskeyKeyProfile): void;
+}
+
+function profileKey(profile: PasskeyKeyProfile): string {
+  return JSON.stringify([
+    profile.version,
+    profile.relyingPartyId,
+    profile.relyingPartyName,
+    bytesToBase64(profile.prfSalt),
+    bytesToBase64(profile.hkdfInfo),
+  ]);
+}
+
+function copyProfile(profile: PasskeyKeyProfile): PasskeyKeyProfile {
+  return {
+    ...profile,
+    prfSalt: profile.prfSalt.slice(),
+    hkdfInfo: profile.hkdfInfo.slice(),
+  };
 }
 
 export function createMemoryPasskeyKeyStorage(): PasskeyKeyStorage {
-  let cached: CachedPRFResult | null = null;
-  let localCredentialId: string | null = null;
+  const cached = new Map<string, CachedPRFResult>();
+  const localCredentialIds = new Map<string, string>();
   return {
-    loadCachedPRFResult() {
-      return cached
-        ? { credentialId: cached.credentialId, prfOutput: cached.prfOutput.slice() }
+    loadCachedPRFResult(profile) {
+      const result = cached.get(profileKey(profile));
+      return result
+        ? {
+            profile: copyProfile(result.profile),
+            credentialId: result.credentialId,
+            prfOutput: result.prfOutput.slice(),
+          }
         : null;
     },
     saveCachedPRFResult(result) {
-      cached = { credentialId: result.credentialId, prfOutput: result.prfOutput.slice() };
+      cached.set(profileKey(result.profile), {
+        profile: copyProfile(result.profile),
+        credentialId: result.credentialId,
+        prfOutput: result.prfOutput.slice(),
+      });
     },
-    loadLocalCredentialId() {
-      return localCredentialId;
+    loadLocalCredentialId(profile) {
+      return localCredentialIds.get(profileKey(profile)) ?? null;
     },
-    saveLocalCredentialId(credentialId) {
-      localCredentialId = credentialId;
+    saveLocalCredentialId(profile, credentialId) {
+      localCredentialIds.set(profileKey(profile), credentialId);
     },
-    clear() {
-      cached = null;
-      localCredentialId = null;
+    clear(profile) {
+      const key = profileKey(profile);
+      cached.delete(key);
+      localCredentialIds.delete(key);
     },
   };
 }

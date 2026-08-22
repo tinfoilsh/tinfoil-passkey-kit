@@ -17,7 +17,7 @@ async function prfCapability(): Promise<PasskeyCapability> {
   if (typeof credentialClass.getClientCapabilities !== "function") return "unknown";
   try {
     const capabilities = await credentialClass.getClientCapabilities();
-    const reported = capabilities["extension-prf"] ?? capabilities.prf;
+    const reported = capabilities["extension:prf"];
     if (reported === true) return "supported";
     if (reported === false) return "unsupported";
   } catch {

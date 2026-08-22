@@ -10,7 +10,6 @@ import type { PasskeyKeyProfile } from "../../src/types.js";
 
 const encoder = new TextEncoder();
 const profile: PasskeyKeyProfile = {
-  id: "tinfoil-v1",
   version: 1,
   relyingPartyId: "example.com",
   relyingPartyName: "Example",
@@ -36,14 +35,15 @@ describe("key wrapping", () => {
         "53c8f700925c9f94a7cf679d8a892c82f7c443769103a322e477a38d9118f0a014a659136ee1b9f6ed4921877f17aca7",
     };
     expect(wrapped).toEqual({
-      profileId: profile.id,
-      version: profile.version,
+      profile,
       ...adapterFixture,
     });
+    expect(wrapped.profile).not.toBe(profile);
+    expect(wrapped.profile.prfSalt).not.toBe(profile.prfSalt);
+    expect(wrapped.profile.hkdfInfo).not.toBe(profile.hkdfInfo);
     expect(
       await unwrapKey(profile, prfOutput, {
-        profileId: profile.id,
-        version: profile.version,
+        profile,
         ...adapterFixture,
       }),
     ).toEqual(key);
@@ -88,7 +88,7 @@ describe("key wrapping", () => {
     const prfOutput = new Uint8Array(32);
     const wrapped = await wrapKey(profile, "AQ", prfOutput, new Uint8Array(32));
     await expect(
-      unwrapKey({ ...profile, id: "other" }, prfOutput, wrapped),
+      unwrapKey({ ...profile, hkdfInfo: encoder.encode("other") }, prfOutput, wrapped),
     ).rejects.toMatchObject({ category: "invalid_input" });
     await expect(
       unwrapKey(profile, prfOutput, { ...wrapped, kekIvHex: "bad" }),

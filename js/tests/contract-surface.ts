@@ -1,6 +1,10 @@
 import type {
+  CreateAndWrapKeyInput,
   PasskeyKeyManager,
+  PasskeyKeyManagerConfig,
   PasskeyKeyProfile,
+  RecoverKeyInput,
+  RewrapKeyInput,
   WrappedKey,
 } from "../../src/index.js";
 
@@ -14,7 +18,6 @@ type Assert<Value extends true> = Value;
 type ProfileFields = Assert<
   Equal<
     keyof PasskeyKeyProfile,
-    | "id"
     | "version"
     | "relyingPartyId"
     | "relyingPartyName"
@@ -25,7 +28,7 @@ type ProfileFields = Assert<
 type WrappedKeyFields = Assert<
   Equal<
     keyof WrappedKey,
-    "profileId" | "version" | "credentialId" | "kekIvHex" | "wrappedKeyHex"
+    "profile" | "credentialId" | "kekIvHex" | "wrappedKeyHex"
   >
 >;
 type ManagerMethods = Assert<
@@ -40,5 +43,25 @@ type ManagerMethods = Assert<
     | "cancelActiveCeremony"
   >
 >;
+type ManagerConfigFields = Assert<
+  Equal<keyof PasskeyKeyManagerConfig, "profile" | "timeoutMs" | "storage">
+>;
+type CreateInputFields = Assert<
+  Equal<keyof CreateAndWrapKeyInput, "user" | "key" | "signal">
+>;
+type RecoverInputFields = Assert<
+  Equal<
+    keyof RecoverKeyInput,
+    "wrappedKeys" | "preferredCredentialId" | "signal"
+  >
+>;
+type RewrapInputFields = Assert<Equal<keyof RewrapKeyInput, "key">>;
 
-export type ContractSurface = ProfileFields | WrappedKeyFields | ManagerMethods;
+export type ContractSurface =
+  | ProfileFields
+  | WrappedKeyFields
+  | ManagerMethods
+  | ManagerConfigFields
+  | CreateInputFields
+  | RecoverInputFields
+  | RewrapInputFields;

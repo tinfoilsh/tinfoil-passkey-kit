@@ -7,7 +7,6 @@ const PRF_OUTPUT_BYTES = 32;
 const AES_GCM_IV_BYTES = 12;
 const AES_GCM_TAG_BYTES = 16;
 const PROFILE_KEYS = [
-  "id",
   "version",
   "relyingPartyId",
   "relyingPartyName",
@@ -28,9 +27,6 @@ export function copyAndValidateProfile(profile: PasskeyKeyProfile): PasskeyKeyPr
   if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
     throw invalidInput(`profile must contain exactly ${PROFILE_KEYS.join(", ")}`);
   }
-  if (typeof profile.id !== "string" || profile.id.length === 0) {
-    throw invalidInput("profile.id must be a non-empty string");
-  }
   if (!Number.isSafeInteger(profile.version) || profile.version <= 0) {
     throw invalidInput("profile.version must be a positive integer");
   }
@@ -43,13 +39,27 @@ export function copyAndValidateProfile(profile: PasskeyKeyProfile): PasskeyKeyPr
   assertBytes(profile.prfSalt, "profile.prfSalt");
   assertBytes(profile.hkdfInfo, "profile.hkdfInfo");
   return {
-    id: profile.id,
     version: profile.version,
     relyingPartyId: profile.relyingPartyId,
     relyingPartyName: profile.relyingPartyName,
     prfSalt: profile.prfSalt.slice(),
     hkdfInfo: profile.hkdfInfo.slice(),
   };
+}
+
+export function profilesEqual(
+  left: PasskeyKeyProfile,
+  right: PasskeyKeyProfile,
+): boolean {
+  return (
+    left.version === right.version &&
+    left.relyingPartyId === right.relyingPartyId &&
+    left.relyingPartyName === right.relyingPartyName &&
+    left.prfSalt.length === right.prfSalt.length &&
+    left.prfSalt.every((byte, index) => byte === right.prfSalt[index]) &&
+    left.hkdfInfo.length === right.hkdfInfo.length &&
+    left.hkdfInfo.every((byte, index) => byte === right.hkdfInfo[index])
+  );
 }
 
 function validateCredentialId(credentialId: string): void {
@@ -71,11 +81,12 @@ export function validateKey(key: Uint8Array, operation?: string): void {
 export function validateWrappedKey(wrapped: WrappedKey, profile: PasskeyKeyProfile): void {
   if (!wrapped || typeof wrapped !== "object") throw invalidInput("wrapped key is required");
   const keys = Object.keys(wrapped).sort();
-  const expected = ["profileId", "version", "credentialId", "kekIvHex", "wrappedKeyHex"].sort();
+  const expected = ["profile", "credentialId", "kekIvHex", "wrappedKeyHex"].sort();
   if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
     throw invalidInput("wrapped key has unexpected fields");
   }
-  if (wrapped.profileId !== profile.id || wrapped.version !== profile.version) {
+  const wrappedProfile = copyAndValidateProfile(wrapped.profile);
+  if (!profilesEqual(wrappedProfile, profile)) {
     throw invalidInput("wrapped key profile mismatch");
   }
   validateCredentialId(wrapped.credentialId);
@@ -134,8 +145,7 @@ export async function wrapKey(
       key as BufferSource,
     );
     return {
-      profileId: profile.id,
-      version: profile.version,
+      profile: copyAndValidateProfile(profile),
       credentialId,
       kekIvHex: bytesToHex(iv),
       wrappedKeyHex: bytesToHex(new Uint8Array(ciphertext)),

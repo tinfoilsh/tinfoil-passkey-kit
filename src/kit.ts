@@ -1,5 +1,6 @@
 import {
   copyAndValidateProfile,
+  profilesEqual,
   unwrapKey,
   validateKey,
   validateWrappedKey,
@@ -82,13 +83,17 @@ function copyWrappedKeys(wrappedKeys: WrappedKey[]): WrappedKey[] {
   if (!Array.isArray(wrappedKeys) || wrappedKeys.length === 0) {
     throw invalidInput("at least one wrapped key is required");
   }
-  return wrappedKeys.map((wrapped) => ({ ...wrapped }));
+  return wrappedKeys.map((wrapped) => ({
+    ...wrapped,
+    profile: copyAndValidateProfile(wrapped.profile),
+  }));
 }
 
 export function createPasskeyKeyManager(
-  config: PasskeyKeyManagerConfig = {},
+  config: PasskeyKeyManagerConfig,
 ): PasskeyKeyManager {
   if (!config || typeof config !== "object") throw invalidInput("manager config is required");
+  const profile = copyAndValidateProfile(config.profile);
   if (
     config.timeoutMs !== undefined &&
     (!Number.isFinite(config.timeoutMs) || config.timeoutMs <= 0)
@@ -160,6 +165,7 @@ export function createPasskeyKeyManager(
   function recordSuccessfulCredential(result: InternalPrfResult): void {
     try {
       config.storage?.saveCachedPRFResult({
+        profile: copyAndValidateProfile(profile),
         credentialId: result.credentialId,
         prfOutput: result.prfOutput.slice(),
       });
@@ -168,7 +174,10 @@ export function createPasskeyKeyManager(
     }
     if (result.isPlatformAuthenticator) {
       try {
-        config.storage?.saveLocalCredentialId(result.credentialId);
+        config.storage?.saveLocalCredentialId(
+          copyAndValidateProfile(profile),
+          result.credentialId,
+        );
       } catch {
         // Storage is best-effort and cannot invalidate a successful ceremony.
       }
@@ -178,26 +187,38 @@ export function createPasskeyKeyManager(
   function loadCachedResult(): CachedPRFResult | null {
     let result: CachedPRFResult | null;
     try {
-      result = config.storage?.loadCachedPRFResult() ?? null;
+      result =
+        config.storage?.loadCachedPRFResult(copyAndValidateProfile(profile)) ?? null;
+    } catch {
+      return null;
+    }
+    if (!result) return null;
+    let cachedProfile: PasskeyKeyProfileSnapshot;
+    try {
+      cachedProfile = copyAndValidateProfile(result.profile);
     } catch {
       return null;
     }
     if (
-      !result ||
+      !profilesEqual(cachedProfile, profile) ||
       typeof result.credentialId !== "string" ||
       !/^[A-Za-z0-9_-]+$/.test(result.credentialId) ||
       result.credentialId.length % 4 === 1 ||
       !(result.prfOutput instanceof Uint8Array) ||
       result.prfOutput.length !== 32
-    ) {
-      return null;
-    }
-    return { credentialId: result.credentialId, prfOutput: result.prfOutput.slice() };
+    ) return null;
+    return {
+      profile: cachedProfile,
+      credentialId: result.credentialId,
+      prfOutput: result.prfOutput.slice(),
+    };
   }
 
   function loadPreferredCredentialId(): string | null {
     try {
-      return config.storage?.loadLocalCredentialId() ?? null;
+      return (
+        config.storage?.loadLocalCredentialId(copyAndValidateProfile(profile)) ?? null
+      );
     } catch {
       return null;
     }
@@ -215,7 +236,6 @@ export function createPasskeyKeyManager(
 
   async function createAndWrapKey(input: CreateAndWrapKeyInput) {
     if (!input || typeof input !== "object") throw invalidInput("input is required");
-    const profile = copyAndValidateProfile(input.profile);
     validateKey(input.key, "createAndWrapKey");
     const key = input.key.slice();
     const user = copyUser(input.user);
@@ -234,10 +254,9 @@ export function createPasskeyKeyManager(
 
   function prepareRecovery(input: RecoverKeyInput) {
     if (!input || typeof input !== "object") throw invalidInput("input is required");
-    const profile = copyAndValidateProfile(input.profile);
     const wrappedKeys = copyWrappedKeys(input.wrappedKeys);
     for (const wrapped of wrappedKeys) validateWrappedKey(wrapped, profile);
-    return { profile, wrappedKeys };
+    return wrappedKeys;
   }
 
   return {
@@ -255,7 +274,7 @@ export function createPasskeyKeyManager(
     createAndWrapKey,
 
     async recoverKey(input) {
-      const { profile, wrappedKeys } = prepareRecovery(input);
+      const wrappedKeys = prepareRecovery(input);
       const credentialIds = orderedCredentialIds(
         wrappedKeys,
         input.preferredCredentialId,
@@ -275,7 +294,7 @@ export function createPasskeyKeyManager(
     },
 
     async recoverKeyFromCache(input) {
-      const { profile, wrappedKeys } = prepareRecovery(input);
+      const wrappedKeys = prepareRecovery(input);
       const cached = loadCachedResult();
       if (!cached) return null;
       const wrapped = wrappedKeys.find(
@@ -294,7 +313,6 @@ export function createPasskeyKeyManager(
 
     async rewrapKeyFromCache(input) {
       if (!input || typeof input !== "object") throw invalidInput("input is required");
-      const profile = copyAndValidateProfile(input.profile);
       validateKey(input.key, "rewrapKeyFromCache");
       const cached = loadCachedResult();
       if (!cached) return null;
@@ -303,7 +321,7 @@ export function createPasskeyKeyManager(
 
     clearLocalState() {
       try {
-        config.storage?.clear();
+        config.storage?.clear(copyAndValidateProfile(profile));
       } catch {
         // Storage is best-effort.
       }
