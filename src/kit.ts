@@ -2,6 +2,7 @@ import {
   copyAndValidateProfile,
   profilesEqual,
   unwrapKey,
+  validateCredentialId,
   validateKey,
   validateWrappedKey,
   wrapKey,
@@ -204,14 +205,12 @@ export function createPasskeyKeyManager(
     let cachedProfile: PasskeyKeyProfileSnapshot;
     try {
       cachedProfile = copyAndValidateProfile(result.profile);
+      validateCredentialId(result.credentialId);
     } catch {
       return null;
     }
     if (
       !profilesEqual(cachedProfile, profile) ||
-      typeof result.credentialId !== "string" ||
-      !/^[A-Za-z0-9_-]+$/.test(result.credentialId) ||
-      result.credentialId.length % 4 === 1 ||
       !(result.prfOutput instanceof Uint8Array) ||
       result.prfOutput.length !== 32
     ) return null;
@@ -239,13 +238,7 @@ export function createPasskeyKeyManager(
     }
     const unique = [...new Set(credentialIds)];
     for (const credentialId of unique) {
-      if (
-        typeof credentialId !== "string" ||
-        !/^[A-Za-z0-9_-]+$/.test(credentialId) ||
-        credentialId.length % 4 === 1
-      ) {
-        throw invalidInput("credentialId must be unpadded base64url");
-      }
+      validateCredentialId(credentialId);
     }
     const preferred = preferredCredentialId ?? loadPreferredCredentialId();
     if (!preferred || !unique.includes(preferred)) return unique;

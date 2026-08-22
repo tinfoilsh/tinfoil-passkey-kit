@@ -48,7 +48,7 @@ function decodeBase64Url(value: unknown, field: string): Uint8Array {
   }
 }
 
-export function encodeWrappedKey(wrappedKey: WrappedKey): string {
+export function encodeWrappedKeyRecord(wrappedKey: WrappedKey): string {
   const profile = copyAndValidateProfile(wrappedKey.profile);
   validateWrappedKey(wrappedKey, profile);
   const record: WrappedKeyRecord = {
@@ -66,7 +66,7 @@ export function encodeWrappedKey(wrappedKey: WrappedKey): string {
   return JSON.stringify(record);
 }
 
-export function decodeWrappedKey(json: string): WrappedKey {
+export function decodeWrappedKeyRecord(json: string): WrappedKey {
   if (typeof json !== "string") throw invalidInput("wrapped key JSON must be a string");
   let parsed: unknown;
   try {

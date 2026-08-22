@@ -1,4 +1,9 @@
-import { bytesToHex, hexToBytes } from "./codec.js";
+import {
+  base64UrlToBytes,
+  bytesToBase64Url,
+  bytesToHex,
+  hexToBytes,
+} from "./codec.js";
 import { invalidInput, operationFailed, PasskeyKeyError } from "./errors.js";
 import type { PasskeyKeyProfile, WrappedKey } from "./types.js";
 
@@ -56,12 +61,22 @@ export function profilesEqual(
   );
 }
 
-function validateCredentialId(credentialId: string): void {
+export function validateCredentialId(credentialId: string): void {
   if (
     typeof credentialId !== "string" ||
+    credentialId.length === 0 ||
     !/^[A-Za-z0-9_-]+$/.test(credentialId) ||
     credentialId.length % 4 === 1
   ) {
+    throw invalidInput("credentialId must be unpadded base64url");
+  }
+  try {
+    const bytes = base64UrlToBytes(credentialId);
+    if (bytes.length === 0 || bytesToBase64Url(bytes) !== credentialId) {
+      throw invalidInput("credentialId must use canonical unpadded base64url");
+    }
+  } catch (cause) {
+    if (cause instanceof PasskeyKeyError) throw cause;
     throw invalidInput("credentialId must be unpadded base64url");
   }
 }

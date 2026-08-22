@@ -8,7 +8,10 @@ import {
   bytesToHex,
   hexToBytes,
 } from "../../src/codec.js";
-import { decodeWrappedKey, encodeWrappedKey } from "../../src/wrapped-key-codec.js";
+import {
+  decodeWrappedKeyRecord,
+  encodeWrappedKeyRecord,
+} from "../../src/wrapped-key-record-codec.js";
 import type { WrappedKey } from "../../src/types.js";
 
 describe("codec", () => {
@@ -68,8 +71,8 @@ describe("wrapped key JSON codec", () => {
     '{"version":1,"profile":{"version":1,"relyingPartyId":"example.com","prfSalt":"AP8","hkdfInfo":"AQID"},"credentialId":"AQID","kekIvHex":"000000000000000000000000","wrappedKeyHex":"111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111"}';
 
   it("emits exact cross-language canonical JSON", () => {
-    expect(encodeWrappedKey(wrappedKey)).toBe(canonical);
-    expect(decodeWrappedKey(canonical)).toEqual(wrappedKey);
+    expect(encodeWrappedKeyRecord(wrappedKey)).toBe(canonical);
+    expect(decodeWrappedKeyRecord(canonical)).toEqual(wrappedKey);
   });
 
   it("accepts insignificant whitespace and any key order", () => {
@@ -85,7 +88,7 @@ describe("wrapped key JSON codec", () => {
       version: 1,
       kekIvHex: wrappedKey.kekIvHex,
     }, null, 2);
-    expect(decodeWrappedKey(reordered)).toEqual(wrappedKey);
+    expect(decodeWrappedKeyRecord(reordered)).toEqual(wrappedKey);
   });
 
   it.each([
@@ -97,16 +100,18 @@ describe("wrapped key JSON codec", () => {
     canonical.replace('"prfSalt":"AP8"', '"prfSalt":"AP8="'),
     canonical.replace('"hkdfInfo":"AQID"', '"hkdfInfo":"***"'),
     canonical.replace('"credentialId":"AQID"', '"credentialId":"AQID="'),
+    canonical.replace('"credentialId":"AQID"', '"credentialId":"AB"'),
+    canonical.replace('"credentialId":"AQID"', '"credentialId":""'),
     canonical.replace('"kekIvHex":"00', '"kekIvHex":"AA'),
   ])("rejects malformed records", (value) => {
-    expect(() => decodeWrappedKey(value)).toThrowError(
+    expect(() => decodeWrappedKeyRecord(value)).toThrowError(
       expect.objectContaining({ category: "invalid_input" }),
     );
   });
 
   it("returns defensive profile byte copies", () => {
-    const first = decodeWrappedKey(canonical);
-    const second = decodeWrappedKey(canonical);
+    const first = decodeWrappedKeyRecord(canonical);
+    const second = decodeWrappedKeyRecord(canonical);
     first.profile.prfSalt[0] = 99;
     first.profile.hkdfInfo[0] = 99;
     expect(second.profile.prfSalt).toEqual(new Uint8Array([0, 255]));

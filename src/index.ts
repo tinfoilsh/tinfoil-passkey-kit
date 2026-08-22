@@ -1,7 +1,10 @@
 export { PasskeyKeyError } from "./errors.js";
 export type { PasskeyKeyErrorCategory } from "./errors.js";
 export { createPasskeyKeyManager } from "./kit.js";
-export { decodeWrappedKey, encodeWrappedKey } from "./wrapped-key-codec.js";
+export {
+  decodeWrappedKeyRecord,
+  encodeWrappedKeyRecord,
+} from "./wrapped-key-record-codec.js";
 export {
   createInsecureBrowserLocalStoragePasskeyKeyStorage,
   createMemoryPasskeyKeyStorage,

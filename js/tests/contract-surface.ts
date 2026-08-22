@@ -1,4 +1,7 @@
-import { decodeWrappedKey, encodeWrappedKey } from "../../src/index.js";
+import {
+  decodeWrappedKeyRecord,
+  encodeWrappedKeyRecord,
+} from "../../src/index.js";
 import type {
   CachedPRFResult,
   CreateAndWrapKeyInput,
@@ -82,8 +85,8 @@ type WrappedKeyRecordProfileFields = Assert<
     "version" | "relyingPartyId" | "prfSalt" | "hkdfInfo"
   >
 >;
-const encodeSignature: (wrappedKey: WrappedKey) => string = encodeWrappedKey;
-const decodeSignature: (json: string) => WrappedKey = decodeWrappedKey;
+const encodeSignature: (wrappedKey: WrappedKey) => string = encodeWrappedKeyRecord;
+const decodeSignature: (json: string) => WrappedKey = decodeWrappedKeyRecord;
 type StorageMethods = Assert<
   Equal<
     PasskeyKeyStorage,

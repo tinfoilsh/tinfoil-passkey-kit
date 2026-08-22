@@ -3,6 +3,7 @@ import {
   copyAndValidateProfile,
   deriveWrappingKey,
   unwrapKey,
+  validateCredentialId,
   validateKey,
   wrapKey,
 } from "../../src/crypto.js";
@@ -64,6 +65,20 @@ describe("key wrapping", () => {
     );
   });
 
+  it.each(["", "A", "AB", "AQ==", "A+"])(
+    "rejects malformed or noncanonical credential IDs",
+    (credentialId) => {
+      expect(() => validateCredentialId(credentialId)).toThrowError(
+        expect.objectContaining({ category: "invalid_input" }),
+      );
+    },
+  );
+
+  it("accepts canonical unpadded credential IDs", () => {
+    expect(() => validateCredentialId("AQ")).not.toThrow();
+    expect(() => validateCredentialId("AQID")).not.toThrow();
+  });
+
   it("strictly validates and defensively copies profiles", () => {
     const input = {
       ...profile,
@@ -94,6 +109,9 @@ describe("key wrapping", () => {
     ).rejects.toMatchObject({ category: "invalid_input" });
     await expect(
       unwrapKey(profile, prfOutput, { ...wrapped, kekIvHex: "bad" }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+    await expect(
+      unwrapKey(profile, prfOutput, { ...wrapped, credentialId: "AB" }),
     ).rejects.toMatchObject({ category: "invalid_input" });
     const first = wrapped.wrappedKeyHex[0] === "0" ? "1" : "0";
     await expect(
