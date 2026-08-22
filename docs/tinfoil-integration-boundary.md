@@ -42,8 +42,11 @@ partition profiles on the kit's behalf.
 The browser and Keychain stores are supported opt-in implementations, not
 defaults. Applications choose them according to their security requirements.
 The advanced `evaluateCredential` API is available for migrations and custom
-interoperability, but application recovery flows should use `recoverKey` and
-avoid handling raw PRF output.
+interoperability. Its result may be passed immediately to
+`wrapKeyWithPRFResult` or `unwrapKeyWithPRFResult`; these methods validate their
+inputs but start no ceremony and access no storage. Application enrollment and
+recovery flows should use `createAndWrapKey` and `recoverKey` and avoid handling
+raw PRF output.
 
 Adapters must not reinterpret ciphertext, change encoding, or trigger migration.
 No feature flag, server schema change, cryptographic wire change, or recovery

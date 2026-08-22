@@ -99,6 +99,17 @@ interface EvaluatedCredential {
   prfResult: PRFResult;
 }
 
+interface WrapKeyWithPRFResultInput {
+  keyMaterial: Uint8Array;
+  credentialId: string;
+  prfResult: PRFResult;
+}
+
+interface UnwrapKeyWithPRFResultInput {
+  wrappedKey: WrappedKey;
+  prfResult: PRFResult;
+}
+
 interface PasskeyKeyManager {
   capability(input: {
     operation: "enroll" | "recover";
@@ -108,6 +119,12 @@ interface PasskeyKeyManager {
   evaluateCredential(
     input: EvaluateCredentialInput,
   ): Promise<EvaluatedCredential>;
+  wrapKeyWithPRFResult(
+    input: WrapKeyWithPRFResultInput,
+  ): Promise<WrappedKey>;
+  unwrapKeyWithPRFResult(
+    input: UnwrapKeyWithPRFResultInput,
+  ): Promise<Uint8Array>;
   recoverKeyFromCache(input: RecoverKeyInput): Promise<RecoveredKey | null>;
   rewrapKeyFromCache(input: RewrapKeyInput): Promise<WrappedKey | null>;
   clearLocalState(): void;
@@ -135,10 +152,27 @@ raw `output` is secret key material: callers must avoid logging, transmitting,
 or retaining it longer than necessary. Swift uses `Data` for this output.
 High-level applications should use `recoverKey` instead.
 
+`wrapKeyWithPRFResult({ keyMaterial, credentialId, prfResult })` and
+`unwrapKeyWithPRFResult({ wrappedKey, prfResult })` are advanced primitives for
+use immediately after `evaluateCredential`, primarily during migration or
+custom interoperability. They validate the manager profile and version, the
+32-byte key material, the 32-byte PRF output, the credential ID, and wrapped-key
+shape as applicable. A profile mismatch or malformed input is `invalid_input`;
+authenticated-decryption failure is `operation_failed`.
+
+These methods only derive, wrap, or unwrap. They never start a passkey ceremony,
+occupy the active ceremony slot, or read or write storage. The supplied PRF
+result remains raw secret key material and must not be logged, transmitted, or
+retained unnecessarily. High-level applications should prefer
+`createAndWrapKey` and `recoverKey`.
+
 JavaScript uses the names shown above. Swift uses `PasskeyKeyManager`,
 `PasskeyKeyProfile`, and `WrappedKey`, with methods `capability(operation:)`,
 `createAndWrapKey`, `recoverKey`, `evaluateCredential`, `recoverKeyFromCache`,
-`rewrapKeyFromCache`, `clearLocalState`, and `cancelActiveCeremony`.
+`rewrapKeyFromCache`, `clearLocalState`, and `cancelActiveCeremony`. Swift also
+exposes `wrapKeyWithPRFResult(keyMaterial:credentialId:prfResult:)` and
+`unwrapKeyWithPRFResult(wrappedKey:prfResult:)` with the same validation and
+side-effect-free behavior.
 Initialisms follow language style (`prf` in JavaScript and `PRF` where exposed
 in Swift), without changing the underlying concept.
 

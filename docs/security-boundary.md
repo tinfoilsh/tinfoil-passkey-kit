@@ -21,6 +21,12 @@ output can rederive the KEK and recover matching wrapped keys. It must not be
 logged, sent to a server, or retained without protections equivalent to key
 material. High-level applications should prefer `recoverKey`.
 
+The advanced explicit-PRF wrap and unwrap methods extend that exposure without
+starting another ceremony. They do not cache the PRF result, but host code still
+holds raw secret material while calling them. Inputs are validated against the
+manager profile, credential encoding, fixed key and PRF lengths, and wrapped-key
+shape; validation does not make an exposed PRF result safe to retain.
+
 ## Challenge limitation
 
 The kit generates a fresh random challenge locally. This prevents accidental

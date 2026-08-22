@@ -15,7 +15,8 @@ and AES-GCM wrapping needed for that flow.
   credentials.
 - Interactive assertions on web and Apple; immediately-available assertions on
   Apple only.
-- An advanced credential-evaluation ceremony for migration and interoperability.
+- Advanced credential evaluation and explicit-PRF wrap/unwrap primitives for
+  migration and interoperability.
 - Wrapping, recovering, and optionally rewrapping keys with a cached PRF result.
 - Exactly 32-byte keys for the first public scope.
 - Profile version 1 only; other profile versions are rejected.
