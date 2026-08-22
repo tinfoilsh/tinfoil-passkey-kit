@@ -120,26 +120,7 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
         platformRequest.userVerificationPreference = .required
         platformRequest.prf = .inputValues(.saltInput1(profile.prfSalt))
 
-        var requests: [ASAuthorizationRequest] = [platformRequest]
-        if #available(iOS 26.4, macOS 26.4, *) {
-            let securityProvider = ASAuthorizationSecurityKeyPublicKeyCredentialProvider(
-                relyingPartyIdentifier: profile.relyingPartyId
-            )
-            let securityRequest = securityProvider.createCredentialAssertionRequest(
-                challenge: try randomChallenge()
-            )
-            securityRequest.allowedCredentials = ids.map {
-                ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor(
-                    credentialID: $0,
-                    transports: ASAuthorizationSecurityKeyPublicKeyCredentialDescriptor
-                        .Transport.allSupported
-                )
-            }
-            securityRequest.userVerificationPreference = .required
-            securityRequest.prf = .inputValues(.saltInput1(profile.prfSalt))
-            requests.append(securityRequest)
-        }
-        perform(requests: requests, interaction: interaction)
+        perform(requests: [platformRequest], interaction: interaction)
     }
 
     private func perform(
@@ -235,18 +216,6 @@ extension ApplePasskeyCeremonyController: ASAuthorizationControllerDelegate {
                 credentialId: ByteCodec.base64URLEncode(assertion.credentialID),
                 prfOutput: data(from: output),
                 isPlatformAuthenticator: assertion.attachment == .platform
-            )))
-            return
-        }
-
-        if #available(iOS 26.4, macOS 26.4, *),
-           let assertion = authorization.credential
-            as? ASAuthorizationSecurityKeyPublicKeyCredentialAssertion,
-           let output = assertion.prf?.first {
-            finish(.success(CeremonyResult(
-                credentialId: ByteCodec.base64URLEncode(assertion.credentialID),
-                prfOutput: data(from: output),
-                isPlatformAuthenticator: false
             )))
             return
         }
