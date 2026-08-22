@@ -8,9 +8,13 @@ and AES-GCM wrapping needed for that flow.
 ## In scope
 
 - JavaScript browser and Swift Apple APIs with equivalent models and behavior.
-- PRF capability reporting, passkey creation, and passkey assertion ceremonies.
+- Operation-specific capability reporting for enrollment and recovery.
+- Passkey creation and assertion ceremonies; recovery permits non-platform
+  credentials.
 - Wrapping, recovering, and optionally rewrapping keys with a cached PRF result.
-- Host-supplied, opt-in local storage for PRF cache and credential metadata.
+- Exactly 32-byte keys for the first public scope.
+- Host-supplied, opt-in synchronous storage for PRF cache and credential
+  metadata.
 - Adapters between generic kit models and existing Tinfoil application records.
 
 ## Out of scope
@@ -21,6 +25,7 @@ and AES-GCM wrapping needed for that flow.
 - Clerk, enclave, inventory, UI, and application recovery-routing behavior.
 - Android, server, or non-browser JavaScript support.
 - Feature flags, a new cryptographic wire format, or server data migration.
+- Generic stable-key-ID derivation, including a `deriveStableKeyId` API.
 - Production storage implementations. Storage types and examples define only
   the integration interface.
 

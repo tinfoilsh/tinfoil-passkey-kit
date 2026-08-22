@@ -12,6 +12,8 @@ PRF output, derives a non-extractable AES-256-GCM key where the platform allows,
 and briefly handles plaintext key bytes during wrap or recovery. Host code owns
 those bytes before wrapping and after recovery. Host-provided storage forms a
 separate trust boundary because a cached PRF result can derive the wrapping key.
+Storage is explicit opt-in and synchronous in v0.2; synchronous access does not
+make the stored secret safer.
 
 ## Challenge limitation
 
@@ -30,6 +32,8 @@ server-verifiable WebAuthn login assertion.
   can read cached material, invoke ceremonies, or exfiltrate recovered keys.
 - A compromised device or authenticator can expose keys while they are in use.
   Hardware-backed passkeys do not make host memory or application code trusted.
+- Recovery may use synced, cross-device, or security-key credentials. Platform
+  attachment is an enrollment capability requirement, not a recovery boundary.
 - A malicious server can withhold, replace, replay, or delete wrapped records.
   AES-GCM detects ciphertext modification but does not provide availability,
   account authorization, record ordering, or rollback protection.
@@ -45,9 +49,11 @@ tag appended to the ciphertext, and no additional authenticated data.
 
 Credential IDs are unpadded base64url. `kekIvHex` and `wrappedKeyHex` are
 lowercase, even-length hexadecimal. The wire record does not carry assertions,
-challenges, PRF output, plaintext keys, or KEKs. `profileId` and `version` are
-routing metadata; an adapter may reconstruct them for legacy records only when
-the application already knows the record's profile.
+challenges, PRF output, plaintext keys, or KEKs. A `PasskeyKeyProfile` contains
+exactly the version, relying-party ID and name, PRF salt, and HKDF info. An
+adapter may reconstruct that profile for a legacy record only when the
+application already knows its derivation contract.
 
 This effort retains that layout. It introduces no new cryptographic format,
-server migration, downgrade protocol, or compatibility negotiation.
+server migration, downgrade protocol, compatibility negotiation, or generic
+stable-key-ID derivation.
