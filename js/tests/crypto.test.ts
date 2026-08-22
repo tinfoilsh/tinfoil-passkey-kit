@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import fixtures from "../../Fixtures/interop.json" with { type: "json" };
+import { hexToBytes } from "../../src/codec.js";
 import {
   copyAndValidateProfile,
   deriveWrappingKey,
@@ -7,50 +9,73 @@ import {
   validateKey,
   wrapKey,
 } from "../../src/crypto.js";
-import type { PasskeyKeyProfile } from "../../src/types.js";
+import {
+  decodeWrappedKeyRecord,
+  encodeWrappedKeyRecord,
+} from "../../src/wrapped-key-record-codec.js";
+import type { PasskeyKeyProfile, WrappedKey } from "../../src/types.js";
 
-const encoder = new TextEncoder();
-const profile: PasskeyKeyProfile = {
-  version: 1,
-  relyingPartyId: "example.com",
-  prfSalt: encoder.encode("tinfoil-chat-key-encryption"),
-  hkdfInfo: encoder.encode("tinfoil-chat-kek-v1"),
-};
+type FixtureVector = (typeof fixtures.vectors)[keyof typeof fixtures.vectors];
+type FixtureProfile = FixtureVector["wrappedKey"]["profile"];
+
+function profileFromFixture(value: FixtureProfile): PasskeyKeyProfile {
+  return {
+    version: value.version as 1,
+    relyingPartyId: value.relyingPartyId,
+    prfSalt: hexToBytes(value.prfSaltHex),
+    hkdfInfo: hexToBytes(value.hkdfInfoHex),
+  };
+}
+
+function wrappedFromFixture(vector: FixtureVector): WrappedKey {
+  return {
+    profile: profileFromFixture(vector.wrappedKey.profile),
+    credentialId: vector.wrappedKey.credentialId,
+    kekIvHex: vector.wrappedKey.kekIvHex,
+    wrappedKeyHex: vector.wrappedKey.wrappedKeyHex,
+  };
+}
+
+const javascriptVector = fixtures.vectors.javascriptWrapped;
+const profile = profileFromFixture(javascriptVector.wrappedKey.profile);
 
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("key wrapping", () => {
-  it("preserves the existing adapter wire bytes", async () => {
-    const prfOutput = new Uint8Array(32).map((_, index) => index);
-    const key = new Uint8Array(32).map((_, index) => 255 - index);
-    const iv = new Uint8Array(12).map((_, index) => index + 1);
+describe("key wrapping interoperability", () => {
+  it("produces the exact JavaScript vector and canonical record", async () => {
+    const iv = hexToBytes(javascriptVector.wrappedKey.kekIvHex);
     vi.spyOn(crypto, "getRandomValues").mockImplementation((value) => {
       new Uint8Array(value.buffer, value.byteOffset, value.byteLength).set(iv);
       return value;
     });
 
-    const wrapped = await wrapKey(profile, "AQID", prfOutput, key);
-    const adapterFixture = {
-      credentialId: "AQID",
-      kekIvHex: "0102030405060708090a0b0c",
-      wrappedKeyHex:
-        "53c8f700925c9f94a7cf679d8a892c82f7c443769103a322e477a38d9118f0a014a659136ee1b9f6ed4921877f17aca7",
-    };
-    expect(wrapped).toEqual({
+    const wrapped = await wrapKey(
       profile,
-      ...adapterFixture,
-    });
+      javascriptVector.wrappedKey.credentialId,
+      hexToBytes(javascriptVector.prfOutputHex),
+      hexToBytes(javascriptVector.keyHex),
+    );
+
+    expect(wrapped).toEqual(wrappedFromFixture(javascriptVector));
+    expect(encodeWrappedKeyRecord(wrapped)).toBe(javascriptVector.canonicalRecord);
     expect(wrapped.profile).not.toBe(profile);
     expect(wrapped.profile.prfSalt).not.toBe(profile.prfSalt);
     expect(wrapped.profile.hkdfInfo).not.toBe(profile.hkdfInfo);
-    expect(
-      await unwrapKey(profile, prfOutput, {
-        profile,
-        ...adapterFixture,
-      }),
-    ).toEqual(key);
+  });
+
+  it("opens the exact Swift vector and canonical record", async () => {
+    const vector = fixtures.vectors.swiftWrapped;
+    const wrapped = decodeWrappedKeyRecord(vector.canonicalRecord);
+    expect(wrapped).toEqual(wrappedFromFixture(vector));
+    await expect(
+      unwrapKey(
+        profileFromFixture(vector.wrappedKey.profile),
+        hexToBytes(vector.prfOutputHex),
+        wrapped,
+      ),
+    ).resolves.toEqual(hexToBytes(vector.keyHex));
   });
 
   it("derives a non-extractable AES-256-GCM key", async () => {
@@ -69,21 +94,24 @@ describe("key wrapping", () => {
     );
   });
 
-  it.each(["", "A", "AB", "AQ==", "A+"])(
-    "rejects malformed or noncanonical credential IDs",
-    (credentialId) => {
-      expect(() => validateCredentialId(credentialId)).toThrowError(
-        expect.objectContaining({ category: "invalid_input" }),
-      );
-    },
-  );
-
-  it("accepts canonical unpadded credential IDs", () => {
-    expect(() => validateCredentialId("AQ")).not.toThrow();
-    expect(() => validateCredentialId("AQID")).not.toThrow();
+  it.each(
+    fixtures.negative.malformedFields
+      .filter(({ field }) => field === "credentialId")
+      .map(({ value }) => value),
+  )("rejects fixture malformed credential ID %s", (credentialId) => {
+    expect(() => validateCredentialId(credentialId)).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
   });
 
-  it("strictly validates and defensively copies profiles", () => {
+  it("accepts fixture canonical credential IDs", () => {
+    expect(() => validateCredentialId("AQ")).not.toThrow();
+    for (const vector of Object.values(fixtures.vectors)) {
+      expect(() => validateCredentialId(vector.wrappedKey.credentialId)).not.toThrow();
+    }
+  });
+
+  it("strictly validates and defensively copies version 1 profiles", () => {
     const input = {
       ...profile,
       prfSalt: profile.prfSalt.slice(),
@@ -105,23 +133,29 @@ describe("key wrapping", () => {
     );
   });
 
-  it("rejects profile mismatches, malformed fields, and tampering", async () => {
-    const prfOutput = new Uint8Array(32);
-    const wrapped = await wrapKey(profile, "AQ", prfOutput, new Uint8Array(32));
+  it("rejects fixture profile mismatch, malformed fields, and tampering", async () => {
+    const wrapped = wrappedFromFixture(javascriptVector);
     await expect(
-      unwrapKey({ ...profile, hkdfInfo: encoder.encode("other") }, prfOutput, wrapped),
+      unwrapKey(
+        profileFromFixture(fixtures.negative.profileMismatch),
+        hexToBytes(javascriptVector.prfOutputHex),
+        wrapped,
+      ),
     ).rejects.toMatchObject({ category: "invalid_input" });
+
+    for (const malformed of fixtures.negative.malformedFields) {
+      await expect(
+        unwrapKey(profile, hexToBytes(javascriptVector.prfOutputHex), {
+          ...wrapped,
+          [malformed.field]: malformed.value,
+        }),
+      ).rejects.toMatchObject({ category: "invalid_input" });
+    }
+
     await expect(
-      unwrapKey(profile, prfOutput, { ...wrapped, kekIvHex: "bad" }),
-    ).rejects.toMatchObject({ category: "invalid_input" });
-    await expect(
-      unwrapKey(profile, prfOutput, { ...wrapped, credentialId: "AB" }),
-    ).rejects.toMatchObject({ category: "invalid_input" });
-    const first = wrapped.wrappedKeyHex[0] === "0" ? "1" : "0";
-    await expect(
-      unwrapKey(profile, prfOutput, {
+      unwrapKey(profile, hexToBytes(javascriptVector.prfOutputHex), {
         ...wrapped,
-        wrappedKeyHex: `${first}${wrapped.wrappedKeyHex.slice(1)}`,
+        wrappedKeyHex: fixtures.negative.tamperedWrappedKeyHex,
       }),
     ).rejects.toMatchObject({ category: "operation_failed" });
     await expect(deriveWrappingKey(new Uint8Array(31), profile)).rejects.toMatchObject({

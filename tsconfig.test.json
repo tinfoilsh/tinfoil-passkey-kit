@@ -5,7 +5,8 @@
     "declarationMap": false,
     "noEmit": true,
     "rootDir": ".",
-    "sourceMap": false
+    "sourceMap": false,
+    "resolveJsonModule": true
   },
-  "include": ["src/**/*.ts", "js/tests/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "js/tests/**/*.ts", "Fixtures/**/*.json", "vitest.config.ts"]
 }
