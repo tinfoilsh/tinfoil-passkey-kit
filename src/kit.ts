@@ -29,6 +29,7 @@ import {
 } from "./webauthn.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+const MIN_TIMEOUT_MS = 1;
 const MAX_TIMEOUT_MS = 2_147_483_647;
 
 interface ActiveCeremony {
@@ -118,10 +119,12 @@ export function createPasskeyKeyManager(
   if (
     config.timeoutMs !== undefined &&
     (!Number.isFinite(config.timeoutMs) ||
-      config.timeoutMs <= 0 ||
+      config.timeoutMs < MIN_TIMEOUT_MS ||
       config.timeoutMs > MAX_TIMEOUT_MS)
   ) {
-    throw invalidInput(`timeoutMs must be between 1 and ${MAX_TIMEOUT_MS}`);
+    throw invalidInput(
+      `timeoutMs must be between ${MIN_TIMEOUT_MS} and ${MAX_TIMEOUT_MS}`,
+    );
   }
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let activeCeremony: ActiveCeremony | null = null;

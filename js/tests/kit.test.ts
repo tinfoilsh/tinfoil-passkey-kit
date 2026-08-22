@@ -9,6 +9,8 @@ import type { PasskeyKeyProfile, WrappedKey } from "../../src/types.js";
 
 const originalCredentials = navigator.credentials;
 const encoder = new TextEncoder();
+const MAX_TIMEOUT_MS = 2_147_483_647;
+const TIMEOUT_EPSILON_MS = 0.001;
 const profile: PasskeyKeyProfile = {
   version: 1,
   relyingPartyId: "example.com",
@@ -578,8 +580,15 @@ describe("ceremony lifecycle", () => {
     ).rejects.toMatchObject({ category: "invalid_input" });
   });
 
-  it("rejects timer values that cannot be scheduled safely", () => {
-    expect(() => createManager({ timeoutMs: 2_147_483_648 })).toThrowError(
+  it("enforces inclusive timeout boundaries", () => {
+    expect(() => createManager({ timeoutMs: 0.999 })).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
+    expect(() => createManager({ timeoutMs: 1 })).not.toThrow();
+    expect(() => createManager({ timeoutMs: MAX_TIMEOUT_MS })).not.toThrow();
+    expect(() =>
+      createManager({ timeoutMs: MAX_TIMEOUT_MS + TIMEOUT_EPSILON_MS }),
+    ).toThrowError(
       expect.objectContaining({ category: "invalid_input" }),
     );
   });
