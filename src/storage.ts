@@ -92,31 +92,44 @@ export function createInsecureBrowserLocalStoragePasskeyKeyStorage(
       }
     },
     saveCachedPRFResult(result) {
-      if (typeof localStorage === "undefined") return;
-      const serialized: SerializedCachedPRFResult = {
-        profile: {
-          version: result.profile.version,
-          relyingPartyId: result.profile.relyingPartyId,
-          prfSaltBase64: bytesToBase64(result.profile.prfSalt),
-          hkdfInfoBase64: bytesToBase64(result.profile.hkdfInfo),
-        },
-        credentialId: result.credentialId,
-        prfOutputBase64: bytesToBase64(result.prfOutput),
-      };
-      localStorage.setItem(cachedKey, JSON.stringify(serialized));
+      try {
+        if (typeof localStorage === "undefined") return;
+        const serialized: SerializedCachedPRFResult = {
+          profile: {
+            version: result.profile.version,
+            relyingPartyId: result.profile.relyingPartyId,
+            prfSaltBase64: bytesToBase64(result.profile.prfSalt),
+            hkdfInfoBase64: bytesToBase64(result.profile.hkdfInfo),
+          },
+          credentialId: result.credentialId,
+          prfOutputBase64: bytesToBase64(result.prfOutput),
+        };
+        localStorage.setItem(cachedKey, JSON.stringify(serialized));
+      } catch {}
     },
     loadLocalCredentialId() {
-      if (typeof localStorage === "undefined") return null;
-      return localStorage.getItem(localCredentialKey);
+      try {
+        if (typeof localStorage === "undefined") return null;
+        return localStorage.getItem(localCredentialKey);
+      } catch {
+        return null;
+      }
     },
     saveLocalCredentialId(credentialId) {
-      if (typeof localStorage === "undefined") return;
-      localStorage.setItem(localCredentialKey, credentialId);
+      try {
+        if (typeof localStorage === "undefined") return;
+        localStorage.setItem(localCredentialKey, credentialId);
+      } catch {}
     },
     clear() {
-      if (typeof localStorage === "undefined") return;
-      localStorage.removeItem(cachedKey);
-      localStorage.removeItem(localCredentialKey);
+      try {
+        if (typeof localStorage === "undefined") return;
+        localStorage.removeItem(cachedKey);
+      } catch {}
+      try {
+        if (typeof localStorage === "undefined") return;
+        localStorage.removeItem(localCredentialKey);
+      } catch {}
     },
   };
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   copyAndValidateProfile,
   deriveWrappingKey,
@@ -16,6 +16,10 @@ const profile: PasskeyKeyProfile = {
   prfSalt: encoder.encode("tinfoil-chat-key-encryption"),
   hkdfInfo: encoder.encode("tinfoil-chat-kek-v1"),
 };
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("key wrapping", () => {
   it("preserves the existing adapter wire bytes", async () => {
@@ -93,10 +97,10 @@ describe("key wrapping", () => {
     expect(() => copyAndValidateProfile({ ...profile, extra: true } as never)).toThrowError(
       expect.objectContaining({ category: "invalid_input" }),
     );
-    expect(() => copyAndValidateProfile({ ...profile, version: 0 })).toThrowError(
+    expect(() => copyAndValidateProfile({ ...profile, version: 0 } as never)).toThrowError(
       expect.objectContaining({ category: "invalid_input" }),
     );
-    expect(() => copyAndValidateProfile({ ...profile, version: 2 })).toThrowError(
+    expect(() => copyAndValidateProfile({ ...profile, version: 2 } as never)).toThrowError(
       expect.objectContaining({ category: "invalid_input" }),
     );
   });

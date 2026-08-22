@@ -29,6 +29,7 @@ import {
 } from "./webauthn.js";
 
 const DEFAULT_TIMEOUT_MS = 60_000;
+const MAX_TIMEOUT_MS = 2_147_483_647;
 
 interface ActiveCeremony {
   token: symbol;
@@ -91,10 +92,15 @@ function copyWrappedKeys(wrappedKeys: WrappedKey[]): WrappedKey[] {
   if (!Array.isArray(wrappedKeys) || wrappedKeys.length === 0) {
     throw invalidInput("at least one wrapped key is required");
   }
-  return wrappedKeys.map((wrapped) => ({
-    ...wrapped,
-    profile: copyAndValidateProfile(wrapped.profile),
-  }));
+  return wrappedKeys.map((wrapped) => {
+    if (!wrapped || typeof wrapped !== "object") {
+      throw invalidInput("wrapped key is required");
+    }
+    return {
+      ...wrapped,
+      profile: copyAndValidateProfile(wrapped.profile),
+    };
+  });
 }
 
 export function createPasskeyKeyManager(
@@ -111,9 +117,11 @@ export function createPasskeyKeyManager(
   const relyingPartyName = config.relyingPartyName;
   if (
     config.timeoutMs !== undefined &&
-    (!Number.isFinite(config.timeoutMs) || config.timeoutMs <= 0)
+    (!Number.isFinite(config.timeoutMs) ||
+      config.timeoutMs <= 0 ||
+      config.timeoutMs > MAX_TIMEOUT_MS)
   ) {
-    throw invalidInput("timeoutMs must be positive and finite");
+    throw invalidInput(`timeoutMs must be between 1 and ${MAX_TIMEOUT_MS}`);
   }
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   let activeCeremony: ActiveCeremony | null = null;

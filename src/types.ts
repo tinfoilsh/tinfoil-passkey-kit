@@ -1,7 +1,7 @@
 import type { PasskeyKeyStorage } from "./storage.js";
 
 export interface PasskeyKeyProfile {
-  version: number;
+  version: 1;
   relyingPartyId: string;
   prfSalt: Uint8Array;
   hkdfInfo: Uint8Array;

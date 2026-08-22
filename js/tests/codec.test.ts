@@ -103,11 +103,28 @@ describe("wrapped key JSON codec", () => {
     canonical.replace('"credentialId":"AQID"', '"credentialId":"AB"'),
     canonical.replace('"credentialId":"AQID"', '"credentialId":""'),
     canonical.replace('"kekIvHex":"00', '"kekIvHex":"AA'),
+    canonical.replace(
+      '"kekIvHex":"000000000000000000000000"',
+      '"kekIvHex":["000000000000000000000000"]',
+    ),
+    canonical.replace(
+      `"wrappedKeyHex":"${wrappedKey.wrappedKeyHex}"`,
+      `"wrappedKeyHex":["${wrappedKey.wrappedKeyHex}"]`,
+    ),
   ])("rejects malformed records", (value) => {
     expect(() => decodeWrappedKeyRecord(value)).toThrowError(
       expect.objectContaining({ category: "invalid_input" }),
     );
   });
+
+  it.each([null, undefined])(
+    "rejects a missing wrapped key during encoding",
+    (value) => {
+      expect(() => encodeWrappedKeyRecord(value as never)).toThrowError(
+        expect.objectContaining({ category: "invalid_input" }),
+      );
+    },
+  );
 
   it("returns defensive profile byte copies", () => {
     const first = decodeWrappedKeyRecord(canonical);

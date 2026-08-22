@@ -11,7 +11,7 @@ const KEY_BYTES = 32;
 const PRF_OUTPUT_BYTES = 32;
 const AES_GCM_IV_BYTES = 12;
 const AES_GCM_TAG_BYTES = 16;
-const PROFILE_KEYS = [
+export const PROFILE_KEYS = [
   "version",
   "relyingPartyId",
   "prfSalt",
@@ -61,24 +61,29 @@ export function profilesEqual(
   );
 }
 
-export function validateCredentialId(credentialId: string): void {
+export function decodeCanonicalBase64Url(value: unknown, field: string): Uint8Array {
   if (
-    typeof credentialId !== "string" ||
-    credentialId.length === 0 ||
-    !/^[A-Za-z0-9_-]+$/.test(credentialId) ||
-    credentialId.length % 4 === 1
+    typeof value !== "string" ||
+    value.length === 0 ||
+    !/^[A-Za-z0-9_-]+$/.test(value) ||
+    value.length % 4 === 1
   ) {
-    throw invalidInput("credentialId must be unpadded base64url");
+    throw invalidInput(`${field} must be unpadded base64url`);
   }
   try {
-    const bytes = base64UrlToBytes(credentialId);
-    if (bytes.length === 0 || bytesToBase64Url(bytes) !== credentialId) {
-      throw invalidInput("credentialId must use canonical unpadded base64url");
+    const bytes = base64UrlToBytes(value);
+    if (bytes.length === 0 || bytesToBase64Url(bytes) !== value) {
+      throw invalidInput(`${field} must use canonical unpadded base64url`);
     }
+    return bytes;
   } catch (cause) {
     if (cause instanceof PasskeyKeyError) throw cause;
-    throw invalidInput("credentialId must be unpadded base64url");
+    throw invalidInput(`${field} must be unpadded base64url`);
   }
+}
+
+export function validateCredentialId(credentialId: string): void {
+  decodeCanonicalBase64Url(credentialId, "credentialId");
 }
 
 export function validateKey(key: Uint8Array, operation?: string): void {

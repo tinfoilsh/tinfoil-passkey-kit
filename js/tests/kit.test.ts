@@ -247,6 +247,32 @@ describe("contract flows", () => {
     second.clear();
   });
 
+  it("treats every browser storage operation as best effort", () => {
+    const storage = createInsecureBrowserLocalStoragePasskeyKeyStorage("blocked");
+    const cached = {
+      profile,
+      credentialId: "AQ",
+      prfOutput: new Uint8Array(32),
+    };
+
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    expect(storage.loadCachedPRFResult()).toBeNull();
+    expect(storage.loadLocalCredentialId()).toBeNull();
+
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("full");
+    });
+    expect(() => storage.saveCachedPRFResult(cached)).not.toThrow();
+    expect(() => storage.saveLocalCredentialId("AQ")).not.toThrow();
+
+    vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+      throw new Error("blocked");
+    });
+    expect(() => storage.clear()).not.toThrow();
+  });
+
   it("catches every host storage operation independently", async () => {
     installCredentials({
       create: vi.fn(async () => credential({ prf: new Uint8Array(32) })),
@@ -546,6 +572,18 @@ describe("explicit PRF key operations", () => {
 });
 
 describe("ceremony lifecycle", () => {
+  it("maps missing wrapped key entries to invalid input", async () => {
+    await expect(
+      createManager().recoverKey({ wrappedKeys: [null] as never }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+  });
+
+  it("rejects timer values that cannot be scheduled safely", () => {
+    expect(() => createManager({ timeoutMs: 2_147_483_648 })).toThrowError(
+      expect.objectContaining({ category: "invalid_input" }),
+    );
+  });
+
   it("maps NotAllowed to cancelled with its documented ambiguity", async () => {
     installCredentials({
       create: vi.fn(async () => {
