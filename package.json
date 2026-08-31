@@ -1,6 +1,6 @@
 {
   "name": "@tinfoilsh/passkey-kit",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "WebAuthn PRF passkey SDK for protecting encryption keys with passkey-derived keys.",
   "license": "Apache-2.0",
   "type": "module",
