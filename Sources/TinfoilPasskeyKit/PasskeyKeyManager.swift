@@ -89,13 +89,13 @@ public final class PasskeyKeyManager {
         preferredCredentialId: String? = nil,
         interaction: PasskeyInteraction = .interactive
     ) async throws -> RecoveredKey {
-        try validate(wrappedKeys: wrappedKeys)
+        let usableKeys = try usableWrappedKeys(wrappedKeys)
         let result = try await evaluateCredentialResult(
-            credentialIds: wrappedKeys.map(\.credentialId),
+            credentialIds: usableKeys.map(\.credentialId),
             preferredCredentialId: preferredCredentialId,
             interaction: interaction
         )
-        guard let wrapped = wrappedKeys.first(where: {
+        guard let wrapped = usableKeys.first(where: {
             $0.credentialId == result.credentialId
         }) else {
             throw PasskeyKeyError.invalidInput(
@@ -165,9 +165,9 @@ public final class PasskeyKeyManager {
         wrappedKeys: [WrappedKey],
         preferredCredentialId: String? = nil
     ) throws -> RecoveredKey? {
-        try validate(wrappedKeys: wrappedKeys)
+        let usableKeys = try usableWrappedKeys(wrappedKeys)
         guard let cached = loadCachedResult(),
-              let wrapped = wrappedKeys.first(where: {
+              let wrapped = usableKeys.first(where: {
                   $0.credentialId == cached.credentialId
               }) else {
             return nil
@@ -311,18 +311,26 @@ public final class PasskeyKeyManager {
         }
     }
 
-    private func validate(wrappedKeys: [WrappedKey]) throws {
+    /// Filter to the wrapped keys this manager can actually use. A
+    /// malformed candidate (wrong profile, non-canonical credential ID,
+    /// bad lengths) is skipped rather than failing the whole set, so one
+    /// corrupt or foreign bundle cannot block recovery from the healthy
+    /// ones. Throws only when no usable candidate remains.
+    private func usableWrappedKeys(_ wrappedKeys: [WrappedKey]) throws -> [WrappedKey] {
         guard !wrappedKeys.isEmpty else {
             throw PasskeyKeyError.invalidInput(
                 diagnostic: "at least one wrapped key is required"
             )
         }
-        for wrapped in wrappedKeys {
-            try KeyWrappingCrypto.validateWrappedKey(
-                wrapped,
-                profile: profile
+        let usable = wrappedKeys.filter { wrapped in
+            (try? KeyWrappingCrypto.validateWrappedKey(wrapped, profile: profile)) != nil
+        }
+        guard !usable.isEmpty else {
+            throw PasskeyKeyError.invalidInput(
+                diagnostic: "no wrapped key matches this profile and format"
             )
         }
+        return usable
     }
 
     private func evaluateCredentialResult(
@@ -354,9 +362,17 @@ public final class PasskeyKeyManager {
             )
         }
         var seen = Set<String>()
-        let credentialIds = credentialIds.filter { seen.insert($0).inserted }
-        for credentialId in credentialIds {
-            _ = try ByteCodec.base64URLDecode(credentialId)
+        // Skip candidates that are not canonical base64url instead of
+        // failing the ceremony: one malformed ID (e.g. a legacy record
+        // written by another client) must not block assertion against
+        // the valid ones.
+        let credentialIds = credentialIds
+            .filter { seen.insert($0).inserted }
+            .filter { (try? ByteCodec.base64URLDecode($0)) != nil }
+        guard !credentialIds.isEmpty else {
+            throw PasskeyKeyError.invalidInput(
+                diagnostic: "no credential ID is valid unpadded base64url"
+            )
         }
         let preferred = preferredCredentialId ?? loadLocalCredentialId()
         guard let preferred, credentialIds.contains(preferred) else {

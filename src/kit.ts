@@ -249,9 +249,20 @@ export function createPasskeyKeyManager(
     if (!Array.isArray(credentialIds) || credentialIds.length === 0) {
       throw invalidInput("at least one credentialId is required");
     }
-    const unique = [...new Set(credentialIds)];
-    for (const credentialId of unique) {
-      validateCredentialId(credentialId);
+    // Skip candidates that are not canonical base64url instead of
+    // failing the ceremony: one malformed ID (e.g. a legacy record
+    // written by another client) must not block assertion against
+    // the valid ones.
+    const unique = [...new Set(credentialIds)].filter((credentialId) => {
+      try {
+        validateCredentialId(credentialId);
+        return true;
+      } catch {
+        return false;
+      }
+    });
+    if (unique.length === 0) {
+      throw invalidInput("no credentialId is valid unpadded base64url");
     }
     const preferred = preferredCredentialId ?? loadPreferredCredentialId();
     if (!preferred || !unique.includes(preferred)) return unique;
@@ -327,8 +338,26 @@ export function createPasskeyKeyManager(
 
   function prepareRecovery(input: RecoverKeyInput) {
     if (!input || typeof input !== "object") throw invalidInput("input is required");
-    const wrappedKeys = copyWrappedKeys(input.wrappedKeys);
-    for (const wrapped of wrappedKeys) validateWrappedKey(wrapped, profile);
+    // Skip malformed candidates (wrong profile, non-canonical
+    // credential ID, bad lengths) rather than failing the whole set,
+    // so one corrupt or foreign bundle cannot block recovery from the
+    // healthy ones. Throw only when no usable candidate remains.
+    if (!Array.isArray(input.wrappedKeys) || input.wrappedKeys.length === 0) {
+      throw invalidInput("at least one wrapped key is required");
+    }
+    const wrappedKeys: WrappedKey[] = [];
+    for (const candidate of input.wrappedKeys) {
+      try {
+        const [wrapped] = copyWrappedKeys([candidate]);
+        validateWrappedKey(wrapped, profile);
+        wrappedKeys.push(wrapped);
+      } catch {
+        // Skipped: malformed candidate.
+      }
+    }
+    if (wrappedKeys.length === 0) {
+      throw invalidInput("no wrapped key matches this profile and format");
+    }
     return wrappedKeys;
   }
 

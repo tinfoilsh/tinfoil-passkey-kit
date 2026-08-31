@@ -451,6 +451,89 @@ final class PasskeyKeyManagerTests: XCTestCase {
         XCTAssertNil(try storage.loadLocalCredentialId())
     }
 
+    func testRecoverySkipsMalformedCandidatesInsteadOfAborting() async throws {
+        let otherProfile = try PasskeyKeyProfile(
+            version: 1,
+            relyingPartyId: "example.com",
+            prfSalt: Data("other".utf8),
+            hkdfInfo: profile.hkdfInfo
+        )
+        let foreignProfileKey = WrappedKey(
+            profile: otherProfile,
+            credentialId: "AQ",
+            kekIvHex: String(repeating: "0", count: 24),
+            wrappedKeyHex: String(repeating: "0", count: 96)
+        )
+        let paddedCredentialKey = WrappedKey(
+            profile: profile,
+            credentialId: "AQID==",
+            kekIvHex: String(repeating: "0", count: 24),
+            wrappedKeyHex: String(repeating: "0", count: 96)
+        )
+        let valid = fixtureWrappedKey(credentialId: "AQID", prfOutput: Data(repeating: 3, count: 32))
+
+        let driver = TestCeremonyDriver(behaviors: [.immediate(.success(result()))])
+        let manager = try makeManager(driver: driver)
+        let recovered = try await manager.recoverKey(
+            wrappedKeys: [foreignProfileKey, paddedCredentialKey, valid]
+        )
+
+        XCTAssertEqual(recovered, RecoveredKey(credentialId: "AQID", key: key))
+        guard case .recover(_, let ids, _) = try XCTUnwrap(driver.requests.first) else {
+            return XCTFail("Expected recovery request")
+        }
+        XCTAssertEqual(ids, ["AQID"])
+    }
+
+    func testRecoveryStillFailsWhenNoCandidateIsUsable() async throws {
+        let paddedCredentialKey = WrappedKey(
+            profile: profile,
+            credentialId: "AQID==",
+            kekIvHex: String(repeating: "0", count: 24),
+            wrappedKeyHex: String(repeating: "0", count: 96)
+        )
+        let driver = TestCeremonyDriver()
+        let manager = try makeManager(driver: driver)
+        await assertError(.invalidInput) {
+            _ = try await manager.recoverKey(wrappedKeys: [paddedCredentialKey])
+        }
+        XCTAssertTrue(driver.requests.isEmpty)
+    }
+
+    func testEvaluateCredentialSkipsMalformedIdsInsteadOfAborting() async throws {
+        let driver = TestCeremonyDriver(behaviors: [.immediate(.success(result()))])
+        let manager = try makeManager(driver: driver)
+
+        let evaluated = try await manager.evaluateCredential(
+            credentialIds: ["AQID==", "not base64!", "AQID"]
+        )
+
+        XCTAssertEqual(evaluated.credentialId, "AQID")
+        guard case .recover(_, let ids, _) = try XCTUnwrap(driver.requests.first) else {
+            return XCTFail("Expected recovery request")
+        }
+        XCTAssertEqual(ids, ["AQID"])
+    }
+
+    func testRecoverKeyFromCacheSkipsMalformedCandidates() async throws {
+        let storage = MemoryPasskeyKeyStorage()
+        let driver = TestCeremonyDriver(behaviors: [.immediate(.success(result()))])
+        let manager = try makeManager(driver: driver, storage: storage)
+        let created = try await manager.createAndWrapKey(user: user, key: key)
+        let paddedCredentialKey = WrappedKey(
+            profile: profile,
+            credentialId: "AQID==",
+            kekIvHex: String(repeating: "0", count: 24),
+            wrappedKeyHex: String(repeating: "0", count: 96)
+        )
+
+        let recovered = try manager.recoverKeyFromCache(
+            wrappedKeys: [paddedCredentialKey, created.wrappedKey]
+        )
+
+        XCTAssertEqual(recovered?.key, key)
+    }
+
     func testCapabilitySeparatesOperationsThroughDriver() async throws {
         let driver = TestCeremonyDriver()
         driver.enrollCapability = .unsupported

@@ -338,6 +338,63 @@ describe("contract flows", () => {
     ).rejects.toMatchObject({ category: "operation_failed" });
     expect(get).toHaveBeenCalledOnce();
   });
+
+  it("skips malformed recovery candidates instead of aborting", async () => {
+    const { created, key, manager } = await createFixture();
+    const foreignProfileKey: WrappedKey = {
+      profile: { ...profile, prfSalt: encoder.encode("other") },
+      credentialId: "AQ",
+      kekIvHex: "00".repeat(12),
+      wrappedKeyHex: "00".repeat(48),
+    };
+    const paddedCredentialKey: WrappedKey = {
+      profile,
+      credentialId: "AQID==",
+      kekIvHex: "00".repeat(12),
+      wrappedKeyHex: "00".repeat(48),
+    };
+
+    const recovered = await manager.recoverKey({
+      wrappedKeys: [foreignProfileKey, paddedCredentialKey, created.wrappedKey],
+    });
+
+    expect(recovered.credentialId).toBe(created.credentialId);
+    expect(recovered.key).toEqual(key);
+  });
+
+  it("fails recovery only when no candidate is usable", async () => {
+    installCredentials({ get: vi.fn() });
+    const paddedCredentialKey: WrappedKey = {
+      profile,
+      credentialId: "AQID==",
+      kekIvHex: "00".repeat(12),
+      wrappedKeyHex: "00".repeat(48),
+    };
+    await expect(
+      createManager().recoverKey({ wrappedKeys: [paddedCredentialKey] }),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+  });
+
+  it("skips malformed credential IDs during direct evaluation", async () => {
+    const prf = new Uint8Array(32).fill(3);
+    const get = vi.fn(async (options: CredentialRequestOptions) => {
+      const ids = options.publicKey!.allowCredentials!.map((item) =>
+        bytesToBase64Url(
+          new Uint8Array(bufferSourceToArrayBuffer(item.id)),
+        ),
+      );
+      expect(ids).toEqual(["AQID"]);
+      return credential({ rawId: new Uint8Array([1, 2, 3]), prf });
+    });
+    installCredentials({ get } as Partial<CredentialsContainer>);
+
+    const evaluated = await createManager().evaluateCredential({
+      credentialIds: ["AQID==", "not base64!", "AQID"],
+    });
+
+    expect(evaluated.credentialId).toBe("AQID");
+    expect(get).toHaveBeenCalledOnce();
+  });
 });
 
 describe("capability", () => {
