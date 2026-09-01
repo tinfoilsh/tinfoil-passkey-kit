@@ -152,7 +152,9 @@ interface PasskeyKeyManager {
   evaluateCredential(
     input: EvaluateCredentialInput,
   ): Promise<EvaluatedCredential>;
-  wrapKeyWithPRFResult(input: WrapKeyWithPRFResultInput): Promise<WrappedKey>;
+  wrapKeyWithPRFResult(
+    input: WrapKeyWithPRFResultInput,
+  ): Promise<WrappedKey>;
   unwrapKeyWithPRFResult(
     input: UnwrapKeyWithPRFResultInput,
   ): Promise<Uint8Array>;
@@ -239,9 +241,9 @@ flows, so Swift reports `unknown` rather than falsely reporting `unsupported`.
 Assertion interaction support is:
 
 | Platform | `interactive` | `immediatelyAvailable` |
-| -------- | ------------- | ---------------------- |
-| Apple    | Supported     | Supported              |
-| Browser  | Supported     | Unsupported            |
+| --- | --- | --- |
+| Apple | Supported | Supported |
+| Browser | Supported | Unsupported |
 
 ## Errors and lifecycle
 
