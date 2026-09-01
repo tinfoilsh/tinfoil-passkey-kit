@@ -156,10 +156,11 @@ export async function wrapKey(
   key: Uint8Array,
   operation = "wrapKey",
 ): Promise<WrappedKey> {
+  const validatedProfile = copyAndValidateProfile(profile);
   validateCredentialId(credentialId);
   validateKey(key, operation);
   try {
-    const wrappingKey = await deriveWrappingKey(prfOutput, profile);
+    const wrappingKey = await deriveWrappingKey(prfOutput, validatedProfile);
     const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
     const ciphertext = await crypto.subtle.encrypt(
       { name: "AES-GCM", iv: iv as BufferSource },
@@ -167,7 +168,7 @@ export async function wrapKey(
       key as BufferSource,
     );
     return {
-      profile: copyAndValidateProfile(profile),
+      profile: validatedProfile,
       credentialId,
       kekIvHex: bytesToHex(iv),
       wrappedKeyHex: bytesToHex(new Uint8Array(ciphertext)),
@@ -191,9 +192,10 @@ export async function unwrapKey(
   wrapped: WrappedKey,
   operation = "unwrapKey",
 ): Promise<Uint8Array> {
-  validateWrappedKey(wrapped, profile);
+  const validatedProfile = copyAndValidateProfile(profile);
+  validateWrappedKey(wrapped, validatedProfile);
   try {
-    const wrappingKey = await deriveWrappingKey(prfOutput, profile);
+    const wrappingKey = await deriveWrappingKey(prfOutput, validatedProfile);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: hexToBytes(wrapped.kekIvHex) as BufferSource },
       wrappingKey,
