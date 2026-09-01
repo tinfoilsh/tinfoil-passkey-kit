@@ -2,6 +2,42 @@ import CryptoKit
 import Foundation
 import Security
 
+/// Wraps exactly 32 key bytes with a key derived from raw WebAuthn PRF
+/// output, without starting a ceremony or accessing storage. The PRF
+/// output is secret key material: callers must avoid logging,
+/// transmitting, or retaining it longer than necessary. High-level
+/// applications should prefer a manager's `createAndWrapKey`.
+public func wrapKey(
+    profile: PasskeyKeyProfile,
+    credentialId: String,
+    prfOutput: Data,
+    key: Data
+) throws -> WrappedKey {
+    try KeyWrappingCrypto.wrap(
+        profile: profile,
+        credentialId: credentialId,
+        prfOutput: prfOutput,
+        key: key
+    )
+}
+
+/// Unwraps a `WrappedKey` with a key derived from raw WebAuthn PRF
+/// output, without starting a ceremony or accessing storage. The PRF
+/// output is secret key material: callers must avoid logging,
+/// transmitting, or retaining it longer than necessary. High-level
+/// applications should prefer a manager's `recoverKey`.
+public func unwrapKey(
+    profile: PasskeyKeyProfile,
+    prfOutput: Data,
+    wrapped: WrappedKey
+) throws -> Data {
+    try KeyWrappingCrypto.unwrap(
+        profile: profile,
+        prfOutput: prfOutput,
+        wrapped: wrapped
+    )
+}
+
 enum KeyWrappingCrypto {
     static let keyByteCount = 32
     static let prfOutputByteCount = 32

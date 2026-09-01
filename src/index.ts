@@ -1,6 +1,7 @@
 export { PasskeyKeyError } from "./errors.js";
 export type { PasskeyKeyErrorCategory } from "./errors.js";
 export { createPasskeyKeyManager } from "./kit.js";
+export { unwrapKey, wrapKey } from "./crypto.js";
 export {
   decodeWrappedKeyRecord,
   encodeWrappedKeyRecord,

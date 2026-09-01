@@ -1,6 +1,8 @@
 import {
   decodeWrappedKeyRecord,
   encodeWrappedKeyRecord,
+  unwrapKey,
+  wrapKey,
 } from "../../src/index.js";
 import type {
   CachedPRFResult,
@@ -19,8 +21,9 @@ import type {
 } from "../../src/index.js";
 
 type Equal<Left, Right> =
-  (<Value>() => Value extends Left ? 1 : 2) extends
-  (<Value>() => Value extends Right ? 1 : 2)
+  (<Value>() => Value extends Left ? 1 : 2) extends <
+    Value,
+  >() => Value extends Right ? 1 : 2
     ? true
     : false;
 type Assert<Value extends true> = Value;
@@ -28,10 +31,7 @@ type Assert<Value extends true> = Value;
 type ProfileFields = Assert<
   Equal<
     keyof PasskeyKeyProfile,
-    | "version"
-    | "relyingPartyId"
-    | "prfSalt"
-    | "hkdfInfo"
+    "version" | "relyingPartyId" | "prfSalt" | "hkdfInfo"
   >
 >;
 type WrappedKeyFields = Assert<
@@ -98,8 +98,22 @@ type WrappedKeyRecordProfileFields = Assert<
     "version" | "relyingPartyId" | "prfSalt" | "hkdfInfo"
   >
 >;
-const encodeSignature: (wrappedKey: WrappedKey) => string = encodeWrappedKeyRecord;
+const encodeSignature: (wrappedKey: WrappedKey) => string =
+  encodeWrappedKeyRecord;
 const decodeSignature: (json: string) => WrappedKey = decodeWrappedKeyRecord;
+const wrapKeySignature: (
+  profile: PasskeyKeyProfile,
+  credentialId: string,
+  prfOutput: Uint8Array,
+  key: Uint8Array,
+  operation?: string,
+) => Promise<WrappedKey> = wrapKey;
+const unwrapKeySignature: (
+  profile: PasskeyKeyProfile,
+  prfOutput: Uint8Array,
+  wrapped: WrappedKey,
+  operation?: string,
+) => Promise<Uint8Array> = unwrapKey;
 type StorageMethods = Assert<
   Equal<
     PasskeyKeyStorage,
@@ -128,4 +142,9 @@ export type ContractSurface =
   | WrappedKeyRecordProfileFields
   | StorageMethods;
 
-export const contractCodec = { encodeSignature, decodeSignature };
+export const contractCodec = {
+  encodeSignature,
+  decodeSignature,
+  wrapKeySignature,
+  unwrapKeySignature,
+};

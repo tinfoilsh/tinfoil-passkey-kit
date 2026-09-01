@@ -18,23 +18,40 @@ export const PROFILE_KEYS = [
   "hkdfInfo",
 ] as const;
 
-function assertBytes(value: unknown, name: string, allowEmpty = false): asserts value is Uint8Array {
+function assertBytes(
+  value: unknown,
+  name: string,
+  allowEmpty = false,
+): asserts value is Uint8Array {
   if (!(value instanceof Uint8Array) || (!allowEmpty && value.length === 0)) {
-    throw invalidInput(`${name} must be ${allowEmpty ? "a" : "a non-empty"} Uint8Array`);
+    throw invalidInput(
+      `${name} must be ${allowEmpty ? "a" : "a non-empty"} Uint8Array`,
+    );
   }
 }
 
-export function copyAndValidateProfile(profile: PasskeyKeyProfile): PasskeyKeyProfile {
-  if (!profile || typeof profile !== "object") throw invalidInput("profile is required");
+export function copyAndValidateProfile(
+  profile: PasskeyKeyProfile,
+): PasskeyKeyProfile {
+  if (!profile || typeof profile !== "object")
+    throw invalidInput("profile is required");
   const keys = Object.keys(profile).sort();
   const expected = [...PROFILE_KEYS].sort();
-  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
-    throw invalidInput(`profile must contain exactly ${PROFILE_KEYS.join(", ")}`);
+  if (
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index])
+  ) {
+    throw invalidInput(
+      `profile must contain exactly ${PROFILE_KEYS.join(", ")}`,
+    );
   }
   if (profile.version !== 1) {
     throw invalidInput("profile.version must be 1");
   }
-  if (typeof profile.relyingPartyId !== "string" || profile.relyingPartyId.length === 0) {
+  if (
+    typeof profile.relyingPartyId !== "string" ||
+    profile.relyingPartyId.length === 0
+  ) {
     throw invalidInput("profile.relyingPartyId must be a non-empty string");
   }
   assertBytes(profile.prfSalt, "profile.prfSalt");
@@ -61,7 +78,10 @@ export function profilesEqual(
   );
 }
 
-export function decodeCanonicalBase64Url(value: unknown, field: string): Uint8Array {
+export function decodeCanonicalBase64Url(
+  value: unknown,
+  field: string,
+): Uint8Array {
   if (
     typeof value !== "string" ||
     value.length === 0 ||
@@ -92,11 +112,23 @@ export function validateKey(key: Uint8Array, operation?: string): void {
   }
 }
 
-export function validateWrappedKey(wrapped: WrappedKey, profile: PasskeyKeyProfile): void {
-  if (!wrapped || typeof wrapped !== "object") throw invalidInput("wrapped key is required");
+export function validateWrappedKey(
+  wrapped: WrappedKey,
+  profile: PasskeyKeyProfile,
+): void {
+  if (!wrapped || typeof wrapped !== "object")
+    throw invalidInput("wrapped key is required");
   const keys = Object.keys(wrapped).sort();
-  const expected = ["profile", "credentialId", "kekIvHex", "wrappedKeyHex"].sort();
-  if (keys.length !== expected.length || keys.some((key, index) => key !== expected[index])) {
+  const expected = [
+    "profile",
+    "credentialId",
+    "kekIvHex",
+    "wrappedKeyHex",
+  ].sort();
+  if (
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index])
+  ) {
     throw invalidInput("wrapped key has unexpected fields");
   }
   const wrappedProfile = copyAndValidateProfile(wrapped.profile);
@@ -108,7 +140,11 @@ export function validateWrappedKey(wrapped: WrappedKey, profile: PasskeyKeyProfi
     throw invalidInput("kekIvHex must be a lowercase 12-byte hex value");
   }
   const ciphertextHexLength = (KEY_BYTES + AES_GCM_TAG_BYTES) * 2;
-  if (!new RegExp(`^[0-9a-f]{${ciphertextHexLength}}$`).test(wrapped.wrappedKeyHex)) {
+  if (
+    !new RegExp(`^[0-9a-f]{${ciphertextHexLength}}$`).test(
+      wrapped.wrappedKeyHex,
+    )
+  ) {
     throw invalidInput("wrappedKeyHex has an invalid format or length");
   }
 }
@@ -117,13 +153,20 @@ export async function deriveWrappingKey(
   prfOutput: Uint8Array,
   profile: PasskeyKeyProfile,
 ): Promise<CryptoKey> {
-  if (!(prfOutput instanceof Uint8Array) || prfOutput.length !== PRF_OUTPUT_BYTES) {
+  if (
+    !(prfOutput instanceof Uint8Array) ||
+    prfOutput.length !== PRF_OUTPUT_BYTES
+  ) {
     throw invalidInput(`PRF output must be exactly ${PRF_OUTPUT_BYTES} bytes`);
   }
   try {
-    const ikm = await crypto.subtle.importKey("raw", prfOutput.slice(), "HKDF", false, [
-      "deriveKey",
-    ]);
+    const ikm = await crypto.subtle.importKey(
+      "raw",
+      prfOutput.slice(),
+      "HKDF",
+      false,
+      ["deriveKey"],
+    );
     return await crypto.subtle.deriveKey(
       {
         name: "HKDF",
@@ -142,12 +185,19 @@ export async function deriveWrappingKey(
   }
 }
 
+/**
+ * Wraps exactly 32 key bytes with a key derived from raw WebAuthn PRF
+ * output, without starting a ceremony or accessing storage. The PRF
+ * output is secret key material: callers must avoid logging,
+ * transmitting, or retaining it longer than necessary. High-level
+ * applications should prefer a manager's `createAndWrapKey`.
+ */
 export async function wrapKey(
   profile: PasskeyKeyProfile,
   credentialId: string,
   prfOutput: Uint8Array,
   key: Uint8Array,
-  operation = "createAndWrapKey",
+  operation = "wrapKey",
 ): Promise<WrappedKey> {
   validateCredentialId(credentialId);
   validateKey(key, operation);
@@ -171,11 +221,18 @@ export async function wrapKey(
   }
 }
 
+/**
+ * Unwraps a `WrappedKey` with a key derived from raw WebAuthn PRF
+ * output, without starting a ceremony or accessing storage. The PRF
+ * output is secret key material: callers must avoid logging,
+ * transmitting, or retaining it longer than necessary. High-level
+ * applications should prefer a manager's `recoverKey`.
+ */
 export async function unwrapKey(
   profile: PasskeyKeyProfile,
   prfOutput: Uint8Array,
   wrapped: WrappedKey,
-  operation = "recoverKey",
+  operation = "unwrapKey",
 ): Promise<Uint8Array> {
   validateWrappedKey(wrapped, profile);
   try {
