@@ -21,9 +21,8 @@ import type {
 } from "../../src/index.js";
 
 type Equal<Left, Right> =
-  (<Value>() => Value extends Left ? 1 : 2) extends <
-    Value,
-  >() => Value extends Right ? 1 : 2
+  (<Value>() => Value extends Left ? 1 : 2) extends
+  (<Value>() => Value extends Right ? 1 : 2)
     ? true
     : false;
 type Assert<Value extends true> = Value;
@@ -31,7 +30,10 @@ type Assert<Value extends true> = Value;
 type ProfileFields = Assert<
   Equal<
     keyof PasskeyKeyProfile,
-    "version" | "relyingPartyId" | "prfSalt" | "hkdfInfo"
+    | "version"
+    | "relyingPartyId"
+    | "prfSalt"
+    | "hkdfInfo"
   >
 >;
 type WrappedKeyFields = Assert<
@@ -98,8 +100,7 @@ type WrappedKeyRecordProfileFields = Assert<
     "version" | "relyingPartyId" | "prfSalt" | "hkdfInfo"
   >
 >;
-const encodeSignature: (wrappedKey: WrappedKey) => string =
-  encodeWrappedKeyRecord;
+const encodeSignature: (wrappedKey: WrappedKey) => string = encodeWrappedKeyRecord;
 const decodeSignature: (json: string) => WrappedKey = decodeWrappedKeyRecord;
 const wrapKeySignature: (
   profile: PasskeyKeyProfile,
