@@ -133,6 +133,22 @@ describe("key wrapping interoperability", () => {
     );
   });
 
+  it("rejects a malformed profile with invalid_input before any crypto", async () => {
+    const malformedProfile = { ...profile, hkdfInfo: undefined } as never;
+    const wrapped = wrappedFromFixture(javascriptVector);
+    await expect(
+      wrapKey(
+        malformedProfile,
+        javascriptVector.wrappedKey.credentialId,
+        hexToBytes(javascriptVector.prfOutputHex),
+        hexToBytes(javascriptVector.keyHex),
+      ),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+    await expect(
+      unwrapKey(malformedProfile, hexToBytes(javascriptVector.prfOutputHex), wrapped),
+    ).rejects.toMatchObject({ category: "invalid_input" });
+  });
+
   it("rejects fixture profile mismatch, malformed fields, and tampering", async () => {
     const wrapped = wrappedFromFixture(javascriptVector);
     await expect(

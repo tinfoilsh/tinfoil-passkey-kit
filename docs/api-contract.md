@@ -205,6 +205,22 @@ result remains raw secret key material and must not be logged, transmitted, or
 retained unnecessarily. High-level applications should prefer
 `createAndWrapKey` and `recoverKey`.
 
+## Standalone crypto functions
+
+The same crypto-only operations are available without a manager for
+migration and interoperability tooling that already holds raw PRF output.
+JavaScript exports `wrapKey(profile, credentialId, prfOutput, key)` and
+`unwrapKey(profile, prfOutput, wrappedKey)`; Swift exposes
+`wrapKey(profile:credentialId:prfOutput:key:)` and
+`unwrapKey(profile:prfOutput:wrapped:)`. Both take an explicit profile
+because there is no manager to supply one, and apply the same validation as
+the manager methods: a profile mismatch or malformed input is
+`invalid_input`; authenticated-decryption failure is `operation_failed`. They
+never start a ceremony or access storage, and the ceremony-only manager
+configuration (`relyingPartyName`, the Apple presentation anchor provider) is
+not required. The raw PRF output remains secret key material and must not be
+logged, transmitted, or retained unnecessarily.
+
 JavaScript uses the names shown above. Swift uses `PasskeyKeyManager`,
 `PasskeyKeyProfile`, and `WrappedKey`, with methods `capability(operation:)`,
 `createAndWrapKey`, `recoverKey`, `evaluateCredential`, `recoverKeyFromCache`,

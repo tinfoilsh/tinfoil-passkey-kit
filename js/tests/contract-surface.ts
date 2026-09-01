@@ -1,6 +1,8 @@
 import {
   decodeWrappedKeyRecord,
   encodeWrappedKeyRecord,
+  unwrapKey,
+  wrapKey,
 } from "../../src/index.js";
 import type {
   CachedPRFResult,
@@ -100,6 +102,19 @@ type WrappedKeyRecordProfileFields = Assert<
 >;
 const encodeSignature: (wrappedKey: WrappedKey) => string = encodeWrappedKeyRecord;
 const decodeSignature: (json: string) => WrappedKey = decodeWrappedKeyRecord;
+const wrapKeySignature: (
+  profile: PasskeyKeyProfile,
+  credentialId: string,
+  prfOutput: Uint8Array,
+  key: Uint8Array,
+  operation?: string,
+) => Promise<WrappedKey> = wrapKey;
+const unwrapKeySignature: (
+  profile: PasskeyKeyProfile,
+  prfOutput: Uint8Array,
+  wrapped: WrappedKey,
+  operation?: string,
+) => Promise<Uint8Array> = unwrapKey;
 type StorageMethods = Assert<
   Equal<
     PasskeyKeyStorage,
@@ -128,4 +143,9 @@ export type ContractSurface =
   | WrappedKeyRecordProfileFields
   | StorageMethods;
 
-export const contractCodec = { encodeSignature, decodeSignature };
+export const contractCodec = {
+  encodeSignature,
+  decodeSignature,
+  wrapKeySignature,
+  unwrapKeySignature,
+};

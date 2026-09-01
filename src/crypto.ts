@@ -142,17 +142,25 @@ export async function deriveWrappingKey(
   }
 }
 
+/**
+ * Wraps exactly 32 key bytes with a key derived from raw WebAuthn PRF
+ * output, without starting a ceremony or accessing storage. The PRF
+ * output is secret key material: callers must avoid logging,
+ * transmitting, or retaining it longer than necessary. High-level
+ * applications should prefer a manager's `createAndWrapKey`.
+ */
 export async function wrapKey(
   profile: PasskeyKeyProfile,
   credentialId: string,
   prfOutput: Uint8Array,
   key: Uint8Array,
-  operation = "createAndWrapKey",
+  operation = "wrapKey",
 ): Promise<WrappedKey> {
+  const validatedProfile = copyAndValidateProfile(profile);
   validateCredentialId(credentialId);
   validateKey(key, operation);
   try {
-    const wrappingKey = await deriveWrappingKey(prfOutput, profile);
+    const wrappingKey = await deriveWrappingKey(prfOutput, validatedProfile);
     const iv = crypto.getRandomValues(new Uint8Array(AES_GCM_IV_BYTES));
     const ciphertext = await crypto.subtle.encrypt(
       { name: "AES-GCM", iv: iv as BufferSource },
@@ -160,7 +168,7 @@ export async function wrapKey(
       key as BufferSource,
     );
     return {
-      profile: copyAndValidateProfile(profile),
+      profile: validatedProfile,
       credentialId,
       kekIvHex: bytesToHex(iv),
       wrappedKeyHex: bytesToHex(new Uint8Array(ciphertext)),
@@ -171,15 +179,23 @@ export async function wrapKey(
   }
 }
 
+/**
+ * Unwraps a `WrappedKey` with a key derived from raw WebAuthn PRF
+ * output, without starting a ceremony or accessing storage. The PRF
+ * output is secret key material: callers must avoid logging,
+ * transmitting, or retaining it longer than necessary. High-level
+ * applications should prefer a manager's `recoverKey`.
+ */
 export async function unwrapKey(
   profile: PasskeyKeyProfile,
   prfOutput: Uint8Array,
   wrapped: WrappedKey,
-  operation = "recoverKey",
+  operation = "unwrapKey",
 ): Promise<Uint8Array> {
-  validateWrappedKey(wrapped, profile);
+  const validatedProfile = copyAndValidateProfile(profile);
+  validateWrappedKey(wrapped, validatedProfile);
   try {
-    const wrappingKey = await deriveWrappingKey(prfOutput, profile);
+    const wrappingKey = await deriveWrappingKey(prfOutput, validatedProfile);
     const plaintext = await crypto.subtle.decrypt(
       { name: "AES-GCM", iv: hexToBytes(wrapped.kekIvHex) as BufferSource },
       wrappingKey,

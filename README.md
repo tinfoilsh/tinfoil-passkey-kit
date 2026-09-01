@@ -88,6 +88,13 @@ insecure because same-origin scripts can read the cached secret material.
 recovery. `wrapKeyWithPRFResult` and `unwrapKeyWithPRFResult` perform explicit
 crypto-only operations without starting a ceremony or accessing storage.
 
+The standalone `wrapKey(profile, credentialId, prfOutput, key)` and
+`unwrapKey(profile, prfOutput, wrappedKey)` functions expose the same
+crypto-only operations without constructing a manager, for migration and
+interoperability tooling that already holds raw PRF output. They apply the
+same validation as the manager methods and treat the PRF output as secret
+key material.
+
 ## Swift quickstart
 
 Add this repository as a Swift Package Manager dependency and link the
@@ -134,6 +141,11 @@ func protectKey(
 Advanced flows can call `evaluateCredential(credentialIds:interaction:)`.
 Its `prfResult.output` is raw secret key material. Do not log, transmit, or
 retain it longer than necessary.
+
+The standalone `wrapKey(profile:credentialId:prfOutput:key:)` and
+`unwrapKey(profile:prfOutput:wrapped:)` functions expose the same crypto-only
+operations without constructing a manager or providing a presentation anchor,
+for migration and interoperability tooling that already holds raw PRF output.
 
 Apple hosts must pass a `PasskeyPresentationAnchorProviding` implementation to
 the manager as `presentationAnchorProvider`. The provider returns the iOS or
