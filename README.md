@@ -147,7 +147,9 @@ generic Apple adapter that stores cached PRF output with
 `kSecAttrAccessibleWhenUnlockedThisDeviceOnly`. Its records are device-bound and
 unavailable while the device is locked, but any process context that can read
 the item can recover keys without another passkey prompt. Choose storage based
-on the host app's threat model. The host app must also provide the
+on the host app's threat model. Hosts migrating from a pre-kit cache format can
+pass the optional `decodeCachedRecord` hook to decode non-canonical stored
+payloads instead of forking the adapter. The host app must also provide the
 `webcredentials` associated-domain entitlement for its relying-party domain.
 Keychain operations are synchronous and can block the manager's main actor.
 
