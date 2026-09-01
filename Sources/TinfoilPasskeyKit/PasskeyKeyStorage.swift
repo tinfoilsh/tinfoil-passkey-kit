@@ -57,17 +57,28 @@ public final class KeychainPasskeyKeyStorage: PasskeyKeyStorage {
     private let account: String
     private let localCredentialIdKey: String
     private let userDefaults: UserDefaults
+    private let decodeCachedRecord: ((Data) throws -> CachedPRFResult)?
 
+    /// `decodeCachedRecord` is an optional read-side hook for hosts
+    /// migrating from a pre-kit cache format: when the stored payload is
+    /// not a canonical `CachedPRFResult`, the hook decodes it instead of
+    /// failing the load. Writes always use the canonical encoding, so
+    /// migrated entries converge on the current format after the next
+    /// successful ceremony. The hook must throw for payloads it cannot
+    /// decode; the manager additionally rejects any result whose profile
+    /// does not match its own.
     public init(
         service: String,
         account: String,
         localCredentialIdKey: String,
-        userDefaults: UserDefaults = .standard
+        userDefaults: UserDefaults = .standard,
+        decodeCachedRecord: ((Data) throws -> CachedPRFResult)? = nil
     ) {
         self.service = service
         self.account = account
         self.localCredentialIdKey = localCredentialIdKey
         self.userDefaults = userDefaults
+        self.decodeCachedRecord = decodeCachedRecord
     }
 
     public func loadCachedPRFResult() throws -> CachedPRFResult? {
@@ -81,7 +92,16 @@ public final class KeychainPasskeyKeyStorage: PasskeyKeyStorage {
         guard status == errSecSuccess, let data = value as? Data else {
             throw storageError(status)
         }
-        return try JSONDecoder().decode(CachedPRFResult.self, from: data)
+        return try decodeStoredRecord(data)
+    }
+
+    func decodeStoredRecord(_ data: Data) throws -> CachedPRFResult {
+        do {
+            return try JSONDecoder().decode(CachedPRFResult.self, from: data)
+        } catch let canonicalError {
+            guard let decodeCachedRecord else { throw canonicalError }
+            return try decodeCachedRecord(data)
+        }
     }
 
     public func saveCachedPRFResult(_ result: CachedPRFResult) throws {

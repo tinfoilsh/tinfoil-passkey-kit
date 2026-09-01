@@ -316,3 +316,12 @@ Swift also provides the opt-in `KeychainPasskeyKeyStorage` adapter. It uses
 device-bound and unavailable while locked. The cache still permits recovery
 without another passkey prompt once readable; hosts must decide whether that
 tradeoff fits their threat model. No storage adapter is enabled by default.
+
+`KeychainPasskeyKeyStorage` accepts an optional `decodeCachedRecord` hook for
+hosts migrating from a pre-kit cache format. When the stored payload is not a
+canonical `CachedPRFResult`, the adapter invokes the hook to decode it instead
+of failing the load; the hook must throw for payloads it cannot decode. Writes
+always use the canonical encoding, so migrated entries converge on the current
+format after the next successful ceremony. The hook only translates bytes into
+a `CachedPRFResult`: the manager still rejects any decoded result whose profile
+snapshot does not exactly match its own.
