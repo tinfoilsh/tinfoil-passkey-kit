@@ -1,10 +1,11 @@
-import { base64UrlToBytes, bufferSourceToArrayBuffer, bytesToBase64Url } from "./codec.js";
+import { base64UrlToBytes, bytesToBase64Url } from "./codec.js";
 import { invalidInput, PasskeyKeyError } from "./errors.js";
 import type { PasskeyUser } from "./types.js";
 
 const CHALLENGE_BYTES = 32;
 const MAX_USER_HANDLE_BYTES = 64;
 const PRF_OUTPUT_BYTES = 32;
+const MAX_BYTE_VALUE = 255;
 
 export interface CeremonyContext {
   rpId: string;
@@ -22,7 +23,7 @@ export interface InternalPrfResult {
 interface PrfExtensionResults {
   prf?: {
     enabled?: boolean;
-    results?: { first?: BufferSource };
+    results?: { first?: unknown };
   };
 }
 
@@ -41,7 +42,31 @@ function resultFromCredential(credential: PublicKeyCredential): InternalPrfResul
   if (!first) {
     throw new PasskeyKeyError("unsupported", "the authenticator returned no PRF output");
   }
-  const prfOutput = new Uint8Array(bufferSourceToArrayBuffer(first));
+  let prfOutput: Uint8Array;
+  if (Array.isArray(first)) {
+    // 1Password's browser extension can return a plain array instead of BufferSource.
+    if (first.length !== PRF_OUTPUT_BYTES) {
+      throw invalidInput(`PRF output must be ${PRF_OUTPUT_BYTES} bytes`);
+    }
+    prfOutput = new Uint8Array(PRF_OUTPUT_BYTES);
+    for (let index = 0; index < PRF_OUTPUT_BYTES; index++) {
+      const byte = first[index];
+      if (
+        !Object.prototype.hasOwnProperty.call(first, index) ||
+        !Number.isInteger(byte) || byte < 0 || byte > MAX_BYTE_VALUE
+      ) {
+        throw invalidInput("PRF output must contain only integer bytes");
+      }
+      prfOutput[index] = byte;
+    }
+  } else if (first instanceof ArrayBuffer || ArrayBuffer.isView(first)) {
+    const bytes = first instanceof ArrayBuffer
+      ? new Uint8Array(first)
+      : new Uint8Array(first.buffer, first.byteOffset, first.byteLength);
+    prfOutput = bytes.slice();
+  } else {
+    throw invalidInput("PRF output must be a buffer or byte array");
+  }
   if (prfOutput.length !== PRF_OUTPUT_BYTES) {
     throw invalidInput(`PRF output must be ${PRF_OUTPUT_BYTES} bytes`);
   }
