@@ -4,8 +4,7 @@
 
 The JavaScript package targets current secure-context WebAuthn implementations.
 Maintainers manually verify PRF ceremonies on real authenticators before a
-release; CI tests protocol behavior but cannot honestly exercise authenticator
-PRF support.
+release; CI cannot exercise authenticator PRF support.
 
 | Browser | Maintainer test matrix | Notes |
 | --- | --- | --- |
@@ -19,10 +18,8 @@ context. The relying-party ID must match the page's registrable domain. An
 iframe also requires an appropriate Permissions Policy.
 
 `capability()` is advisory. A browser may expose WebAuthn without the selected
-authenticator returning PRF output. Hybrid cross-device flows and synced
-passkeys depend on the browser, operating system, account state, and nearby
-device. Security-key PRF support is authenticator-specific and is not implied by
-general WebAuthn support.
+authenticator returning PRF output. Hybrid, synced, and security-key recovery
+depend on the browser, operating system, account state, and authenticator.
 
 ## Apple
 
@@ -32,15 +29,12 @@ general WebAuthn support.
 | macOS | 15.0 | Platform, synced, and cross-device passkey recovery |
 
 Apple apps need the `webcredentials` associated-domain entitlement and a valid
-`apple-app-site-association` file. Apple does not provide reliable PRF preflight
-for every flow, so capability may be `unknown`; allow the ceremony and handle
-its result. The host must also provide an active `UIWindow` or `NSWindow`
-through `PasskeyPresentationAnchorProviding` so AuthenticationServices can
-present interactive ceremonies.
+`apple-app-site-association` file. The host must provide an active `UIWindow`
+or `NSWindow` through `PasskeyPresentationAnchorProviding`.
 
-Explicit security-key PRF requests are not enabled because the baseline
-toolchain does not provide that API. Browsers may support security-key or hybrid
-recovery.
+Apple has no reliable PRF preflight, so capability may be `unknown`; allow the
+ceremony and handle its result. Explicit security-key PRF is not enabled
+because the baseline toolchain does not provide that API.
 
 Simulator and unit tests do not establish real PRF support. Manually test at
 least enrollment, same-device recovery, synced or hybrid recovery, cancellation,
