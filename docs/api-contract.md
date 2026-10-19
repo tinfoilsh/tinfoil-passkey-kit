@@ -2,7 +2,7 @@
 
 JavaScript and Swift expose the same concepts with platform conventions:
 `Uint8Array` in JavaScript and `Data` in Swift, `prf` in JavaScript and `PRF`
-in Swift. Exact signatures are in [`src/types.ts`](../src/types.ts) and
+in Swift. Exact signatures are in [`src`](../src) and
 [`Sources/TinfoilPasskeyKit`](../Sources/TinfoilPasskeyKit).
 
 ## Profile
