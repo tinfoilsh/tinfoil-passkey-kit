@@ -62,13 +62,15 @@ defaults to 60 seconds.
 - `recoverKeyFromCache` and `rewrapKeyFromCache` never start a ceremony and
   return `null` when no usable matching-profile cache exists. Storage failures
   do not discard a successful ceremony.
-- `evaluateCredential` authenticates against the given credential IDs and
-  returns the matched ID with raw PRF output, for migrations and
-  interoperability. `wrapKeyWithPRFResult` and `unwrapKeyWithPRFResult` then
-  wrap or unwrap with that output. The standalone `wrapKey` and `unwrapKey`
-  functions do the same with an explicit profile and no manager. None of these
-  start a ceremony, occupy the ceremony slot, or access storage. Applications
-  should prefer `createAndWrapKey` and `recoverKey`.
+- `evaluateCredential` runs an assertion ceremony against the given credential
+  IDs and returns the matched ID with raw PRF output, for migrations and
+  interoperability. Like the other ceremonies, it caches the result when
+  storage is configured.
+- `wrapKeyWithPRFResult` and `unwrapKeyWithPRFResult` wrap or unwrap with that
+  output, and the standalone `wrapKey` and `unwrapKey` functions do the same
+  with an explicit profile and no manager. These never start a ceremony, occupy
+  the ceremony slot, or access storage. Applications should prefer
+  `createAndWrapKey` and `recoverKey`.
 
 For every wrap and unwrap operation, a profile mismatch or malformed input
 (key or PRF output not 32 bytes, invalid credential ID, malformed wrapped key)
