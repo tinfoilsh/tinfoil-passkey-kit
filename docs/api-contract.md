@@ -55,9 +55,10 @@ defaults to 60 seconds.
   embedding the manager profile in the `WrappedKey`. The user `id` is a stable
   opaque handle, `name` is the account identifier, and `displayName` defaults
   to `name`. Creation is always interactive.
-- `recoverKey` rejects any wrapped key whose profile differs from the manager's
-  with `invalid_input`, authenticates only against the listed credential IDs,
-  and returns the matched credential ID and key.
+- `recoverKey` skips wrapped keys that are malformed or whose profile differs
+  from the manager's, failing with `invalid_input` only when none remain. It
+  authenticates only against the remaining credential IDs and returns the
+  matched credential ID and key.
 - `recoverKeyFromCache` and `rewrapKeyFromCache` never start a ceremony and
   return `null` when no usable matching-profile cache exists. Storage failures
   do not discard a successful ceremony.
