@@ -36,13 +36,13 @@ const created = await manager.createAndWrapKey({
   user: { id: crypto.getRandomValues(new Uint8Array(32)), name: "person@example.com" },
   key: crypto.getRandomValues(new Uint8Array(32)),
 });
-await wrappedKeyRepository.save(encodeWrappedKeyRecord(created.wrappedKey));
+// Persist the encoded records in your application's storage.
+const records = [encodeWrappedKeyRecord(created.wrappedKey)];
 
-const wrappedKeys = (await wrappedKeyRepository.list()).map(decodeWrappedKeyRecord);
-const recovered = await manager.recoverKey({ wrappedKeys });
+const recovered = await manager.recoverKey({ wrappedKeys: records.map(decodeWrappedKeyRecord) });
 ```
 
-`wrappedKeyRepository` is application-owned; see the
+Record persistence is application-owned; see the
 [repository interface](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/docs/wrapped-key-repository.md)
 and the runnable [web example](https://github.com/tinfoilsh/tinfoil-passkey-kit/blob/main/Examples/Web/README.md).
 Failures throw `PasskeyKeyError`; branch on its `category`, not its message.
@@ -58,28 +58,37 @@ app needs the `webcredentials` associated-domain entitlement for its
 relying-party domain.
 
 ```swift
+import Foundation
 import TinfoilPasskeyKit
 
-// On the main actor. The provider returns the window that presents passkey UI.
-let manager = try PasskeyKeyManager(
-    profile: PasskeyKeyProfile(
-        version: 1,
-        relyingPartyId: "example.com",
-        prfSalt: Data("example-key-wrapping".utf8),
-        hkdfInfo: Data("example-wrapping-key-v1".utf8)
-    ),
-    relyingPartyName: "Example App",
-    presentationAnchorProvider: presentationAnchorProvider
-)
+// The provider returns the window that presents passkey UI.
+@MainActor
+func protectAndRecover(
+    key: Data,
+    userHandle: Data,
+    presentationAnchorProvider: any PasskeyPresentationAnchorProviding
+) async throws -> Data {
+    let manager = try PasskeyKeyManager(
+        profile: PasskeyKeyProfile(
+            version: 1,
+            relyingPartyId: "example.com",
+            prfSalt: Data("example-key-wrapping".utf8),
+            hkdfInfo: Data("example-wrapping-key-v1".utf8)
+        ),
+        relyingPartyName: "Example App",
+        presentationAnchorProvider: presentationAnchorProvider
+    )
 
-let created = try await manager.createAndWrapKey(
-    user: PasskeyUser(id: opaqueUserHandle, name: "person@example.com"),
-    key: key
-)
-await wrappedKeyRepository.save(try encodeWrappedKeyRecord(created.wrappedKey))
+    let created = try await manager.createAndWrapKey(
+        user: PasskeyUser(id: userHandle, name: "person@example.com"),
+        key: key
+    )
+    // Persist the encoded records in your application's storage.
+    let records = [try encodeWrappedKeyRecord(created.wrappedKey)]
 
-let records: [Data] = await wrappedKeyRepository.list()
-let recovered = try await manager.recoverKey(wrappedKeys: records.map(decodeWrappedKeyRecord))
+    let recovered = try await manager.recoverKey(wrappedKeys: records.map(decodeWrappedKeyRecord))
+    return recovered.key
+}
 ```
 
 `KeychainPasskeyKeyStorage` is an optional device-bound PRF cache; choose
