@@ -1,6 +1,6 @@
 import { base64UrlToBytes, bytesToBase64Url } from "./codec.js";
 import { invalidInput, PasskeyKeyError } from "./errors.js";
-import type { PasskeyUser } from "./types.js";
+import type { EnrollmentAttachment, PasskeyUser } from "./types.js";
 
 const CHALLENGE_BYTES = 32;
 const MAX_USER_HANDLE_BYTES = 64;
@@ -81,6 +81,7 @@ export async function createPrfCredential(
   context: CeremonyContext,
   user: PasskeyUser,
   signal: AbortSignal,
+  enrollmentAttachment: EnrollmentAttachment,
 ): Promise<InternalPrfResult> {
   if (!(user?.id instanceof Uint8Array) || user.id.length === 0) {
     throw invalidInput("user.id must be a non-empty Uint8Array");
@@ -110,7 +111,7 @@ export async function createPrfCredential(
         { type: "public-key", alg: -257 },
       ],
       authenticatorSelection: {
-        authenticatorAttachment: "platform",
+        authenticatorAttachment: enrollmentAttachment === "platform" ? "platform" : undefined,
         residentKey: "preferred",
         userVerification: "required",
       },

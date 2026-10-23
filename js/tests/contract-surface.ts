@@ -60,7 +60,11 @@ type ManagerMethods = Assert<
 type ManagerConfigFields = Assert<
   Equal<
     keyof PasskeyKeyManagerConfig,
-    "profile" | "relyingPartyName" | "timeoutMs" | "storage"
+    | "profile"
+    | "relyingPartyName"
+    | "timeoutMs"
+    | "storage"
+    | "enrollmentAttachment"
   >
 >;
 type CreateInputFields = Assert<
