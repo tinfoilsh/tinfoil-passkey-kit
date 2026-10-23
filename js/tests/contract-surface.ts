@@ -7,11 +7,15 @@ import {
 import type {
   CachedPRFResult,
   CreateAndWrapKeyInput,
+  CreatedWrappedKey,
   EvaluateCredentialInput,
+  EvaluatedCredential,
+  PasskeyAttachment,
   PasskeyKeyManager,
   PasskeyKeyManagerConfig,
   PasskeyKeyProfile,
   PasskeyKeyStorage,
+  RecoveredKey,
   RecoverKeyInput,
   RewrapKeyInput,
   UnwrapKeyWithPRFResultInput,
@@ -92,6 +96,24 @@ type EvaluateInputFields = Assert<
     "credentialIds" | "preferredCredentialId" | "signal" | "interaction"
   >
 >;
+type AttachmentValues = Assert<
+  Equal<PasskeyAttachment, "platform" | "cross-platform">
+>;
+type CreatedWrappedKeyFields = Assert<
+  Equal<
+    keyof CreatedWrappedKey,
+    "credentialId" | "wrappedKey" | "authenticatorAttachment"
+  >
+>;
+type EvaluatedCredentialFields = Assert<
+  Equal<
+    keyof EvaluatedCredential,
+    "credentialId" | "prfResult" | "authenticatorAttachment"
+  >
+>;
+type RecoveredKeyFields = Assert<
+  Equal<keyof RecoveredKey, "credentialId" | "key" | "authenticatorAttachment">
+>;
 type WrappedKeyRecordFields = Assert<
   Equal<
     keyof WrappedKeyRecord,
@@ -143,6 +165,10 @@ export type ContractSurface =
   | WrapWithPRFInputFields
   | UnwrapWithPRFInputFields
   | EvaluateInputFields
+  | AttachmentValues
+  | CreatedWrappedKeyFields
+  | EvaluatedCredentialFields
+  | RecoveredKeyFields
   | WrappedKeyRecordFields
   | WrappedKeyRecordProfileFields
   | StorageMethods;

@@ -81,7 +81,11 @@ public final class PasskeyKeyManager {
             credentialId: result.credentialId,
             prfResult: PRFResult(output: result.prfOutput)
         )
-        return CreatedWrappedKey(credentialId: result.credentialId, wrappedKey: wrapped)
+        return CreatedWrappedKey(
+            credentialId: result.credentialId,
+            wrappedKey: wrapped,
+            authenticatorAttachment: result.authenticatorAttachment
+        )
     }
 
     public func recoverKey(
@@ -106,7 +110,11 @@ public final class PasskeyKeyManager {
             wrappedKey: wrapped,
             prfResult: PRFResult(output: result.prfOutput)
         )
-        return RecoveredKey(credentialId: result.credentialId, key: key)
+        return RecoveredKey(
+            credentialId: result.credentialId,
+            key: key,
+            authenticatorAttachment: result.authenticatorAttachment
+        )
     }
 
     public func evaluateCredential(
@@ -121,7 +129,8 @@ public final class PasskeyKeyManager {
         )
         return EvaluatedCredential(
             credentialId: result.credentialId,
-            prfResult: PRFResult(output: Self.copy(result.prfOutput))
+            prfResult: PRFResult(output: Self.copy(result.prfOutput)),
+            authenticatorAttachment: result.authenticatorAttachment
         )
     }
 
@@ -408,7 +417,7 @@ public final class PasskeyKeyManager {
                 )
             )
         } catch {}
-        if result.isPlatformAuthenticator {
+        if result.authenticatorAttachment == .platform {
             do {
                 try storage?.saveLocalCredentialId(result.credentialId)
             } catch {}

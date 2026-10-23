@@ -23,6 +23,7 @@ export interface PasskeyUser {
 export type PasskeyCapability = "supported" | "unsupported" | "unknown";
 export type PasskeyInteraction = "interactive" | "immediatelyAvailable";
 export type EnrollmentAttachment = "platform" | "any";
+export type PasskeyAttachment = "platform" | "cross-platform";
 
 export interface CreateAndWrapKeyInput {
   user: PasskeyUser;
@@ -33,6 +34,7 @@ export interface CreateAndWrapKeyInput {
 export interface CreatedWrappedKey {
   credentialId: string;
   wrappedKey: WrappedKey;
+  authenticatorAttachment: PasskeyAttachment | null;
 }
 
 export interface RecoverKeyInput {
@@ -56,6 +58,7 @@ export interface PRFResult {
 export interface EvaluatedCredential {
   credentialId: string;
   prfResult: PRFResult;
+  authenticatorAttachment: PasskeyAttachment | null;
 }
 
 export interface WrapKeyWithPRFResultInput {
@@ -72,6 +75,7 @@ export interface UnwrapKeyWithPRFResultInput {
 export interface RecoveredKey {
   credentialId: string;
   key: Uint8Array;
+  authenticatorAttachment: PasskeyAttachment | null;
 }
 
 export interface RewrapKeyInput {

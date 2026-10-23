@@ -11,7 +11,7 @@ public protocol PasskeyPresentationAnchorProviding: AnyObject {
 struct CeremonyResult: Sendable {
     let credentialId: String
     let prfOutput: Data
-    let isPlatformAuthenticator: Bool
+    let authenticatorAttachment: PasskeyAttachment?
 }
 
 enum CeremonyRequest: Sendable {
@@ -188,6 +188,16 @@ private final class ApplePasskeyCeremonyController: NSObject, CeremonyControllin
     private func data(from key: SymmetricKey) -> Data {
         key.withUnsafeBytes { Data($0) }
     }
+
+    private func passkeyAttachment(
+        from attachment: ASAuthorizationPublicKeyCredentialAttachment
+    ) -> PasskeyAttachment? {
+        switch attachment {
+        case .platform: .platform
+        case .crossPlatform: .crossPlatform
+        @unknown default: nil
+        }
+    }
 }
 
 @MainActor
@@ -222,7 +232,7 @@ extension ApplePasskeyCeremonyController: ASAuthorizationControllerDelegate {
                 finish(.success(CeremonyResult(
                     credentialId: credentialId,
                     prfOutput: data(from: first),
-                    isPlatformAuthenticator: registration.attachment == .platform
+                    authenticatorAttachment: passkeyAttachment(from: registration.attachment)
                 )))
                 return
             }
@@ -256,7 +266,7 @@ extension ApplePasskeyCeremonyController: ASAuthorizationControllerDelegate {
             finish(.success(CeremonyResult(
                 credentialId: ByteCodec.base64URLEncode(assertion.credentialID),
                 prfOutput: data(from: output),
-                isPlatformAuthenticator: assertion.attachment == .platform
+                authenticatorAttachment: passkeyAttachment(from: assertion.attachment)
             )))
             return
         }

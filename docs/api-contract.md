@@ -66,6 +66,11 @@ defaults to 60 seconds.
   IDs and returns the matched ID with raw PRF output, for migrations and
   interoperability. Like the other ceremonies, it caches the result when
   storage is configured.
+- `createAndWrapKey`, `recoverKey`, and `evaluateCredential` report
+  `authenticatorAttachment`: `platform` for an authenticator built into this
+  device, `cross-platform` (`crossPlatform` in Swift) for a security key or a
+  phone used across devices, or `null` (`nil`) when the platform does not say.
+  `recoverKeyFromCache` reports `null` because no ceremony ran.
 - `wrapKeyWithPRFResult` and `unwrapKeyWithPRFResult` wrap or unwrap with that
   output, and the standalone `wrapKey` and `unwrapKey` functions do the same
   with an explicit profile and no manager. These never start a ceremony, occupy
@@ -141,6 +146,9 @@ interface PasskeyKeyStorage {
   clear(): void;
 }
 ```
+
+Every successful ceremony replaces the cached PRF result, but only a `platform`
+credential becomes the local credential ID.
 
 No method takes a profile. Each cached result carries a full profile snapshot,
 and the manager rejects it unless the snapshot exactly matches its profile.

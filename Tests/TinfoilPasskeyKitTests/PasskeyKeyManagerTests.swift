@@ -20,7 +20,7 @@ final class PasskeyKeyManagerTests: XCTestCase {
         let storage = MemoryPasskeyKeyStorage()
         let driver = TestCeremonyDriver(behaviors: [
             .immediate(.success(result())),
-            .immediate(.success(result(isPlatformAuthenticator: false)))
+            .immediate(.success(result(authenticatorAttachment: .crossPlatform)))
         ])
         let manager = try makeManager(driver: driver, storage: storage)
 
@@ -28,8 +28,12 @@ final class PasskeyKeyManagerTests: XCTestCase {
         let recovered = try await manager.recoverKey(wrappedKeys: [created.wrappedKey])
 
         XCTAssertEqual(created.credentialId, "AQID")
+        XCTAssertEqual(created.authenticatorAttachment, .platform)
         XCTAssertEqual(created.wrappedKey.profile, profile)
-        XCTAssertEqual(recovered, RecoveredKey(credentialId: "AQID", key: key))
+        XCTAssertEqual(
+            recovered,
+            RecoveredKey(credentialId: "AQID", key: key, authenticatorAttachment: .crossPlatform)
+        )
         XCTAssertEqual(try storage.loadCachedPRFResult()?.profile, profile)
         guard case .create(_, let relyingPartyName, _) = driver.requests[0] else {
             return XCTFail("Expected creation request")
@@ -135,7 +139,7 @@ final class PasskeyKeyManagerTests: XCTestCase {
         let manager = try makeManager(
             driver: TestCeremonyDriver(behaviors: [
                 .immediate(.success(result())),
-                .immediate(.success(result(isPlatformAuthenticator: false)))
+                .immediate(.success(result(authenticatorAttachment: .crossPlatform)))
             ]),
             storage: storage
         )
@@ -174,12 +178,38 @@ final class PasskeyKeyManagerTests: XCTestCase {
         XCTAssertEqual(try storage.loadLocalCredentialId(), ceremonyResult.credentialId)
     }
 
+    func testRoamingCeremonyIsCachedWithoutReplacingLocalCredential() async throws {
+        let storage = MemoryPasskeyKeyStorage()
+        let manager = try makeManager(
+            driver: TestCeremonyDriver(behaviors: [
+                .immediate(.success(result(credentialId: "AQ"))),
+                .immediate(.success(result(
+                    credentialId: "Ag",
+                    prfOutput: Data(repeating: 4, count: 32),
+                    authenticatorAttachment: .crossPlatform
+                )))
+            ]),
+            storage: storage
+        )
+
+        _ = try await manager.createAndWrapKey(user: user, key: key)
+        let evaluated = try await manager.evaluateCredential(credentialIds: ["Ag"])
+
+        XCTAssertEqual(evaluated.authenticatorAttachment, .crossPlatform)
+        XCTAssertEqual(try storage.loadCachedPRFResult()?.credentialId, "Ag")
+        XCTAssertEqual(try storage.loadLocalCredentialId(), "AQ")
+        let cached = try manager.recoverKeyFromCache(
+            wrappedKeys: [fixtureWrappedKey(credentialId: "Ag", prfOutput: Data(repeating: 4, count: 32))]
+        )
+        XCTAssertEqual(cached, RecoveredKey(credentialId: "Ag", key: key, authenticatorAttachment: nil))
+    }
+
     func testPreferredCredentialAndImmediateModeReachDriver() async throws {
         let driver = TestCeremonyDriver(behaviors: [
             .immediate(.success(result(
                 credentialId: "Ag",
                 prfOutput: Data(count: 32),
-                isPlatformAuthenticator: false
+                authenticatorAttachment: .crossPlatform
             )))
         ])
         let manager = try makeManager(driver: driver)
@@ -478,7 +508,10 @@ final class PasskeyKeyManagerTests: XCTestCase {
             wrappedKeys: [foreignProfileKey, paddedCredentialKey, valid]
         )
 
-        XCTAssertEqual(recovered, RecoveredKey(credentialId: "AQID", key: key))
+        XCTAssertEqual(
+            recovered,
+            RecoveredKey(credentialId: "AQID", key: key, authenticatorAttachment: .platform)
+        )
         guard case .recover(_, let ids, _) = try XCTUnwrap(driver.requests.first) else {
             return XCTFail("Expected recovery request")
         }
@@ -566,12 +599,12 @@ final class PasskeyKeyManagerTests: XCTestCase {
     private func result(
         credentialId: String = "AQID",
         prfOutput: Data = Data(repeating: 3, count: 32),
-        isPlatformAuthenticator: Bool = true
+        authenticatorAttachment: PasskeyAttachment? = .platform
     ) -> CeremonyResult {
         CeremonyResult(
             credentialId: credentialId,
             prfOutput: prfOutput,
-            isPlatformAuthenticator: isPlatformAuthenticator
+            authenticatorAttachment: authenticatorAttachment
         )
     }
 

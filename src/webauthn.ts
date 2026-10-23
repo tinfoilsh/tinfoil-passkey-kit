@@ -1,6 +1,6 @@
 import { base64UrlToBytes, bytesToBase64Url } from "./codec.js";
 import { invalidInput, PasskeyKeyError } from "./errors.js";
-import type { EnrollmentAttachment, PasskeyUser } from "./types.js";
+import type { EnrollmentAttachment, PasskeyAttachment, PasskeyUser } from "./types.js";
 
 const CHALLENGE_BYTES = 32;
 const MAX_USER_HANDLE_BYTES = 64;
@@ -17,7 +17,7 @@ export interface CeremonyContext {
 export interface InternalPrfResult {
   credentialId: string;
   prfOutput: Uint8Array;
-  isPlatformAuthenticator: boolean;
+  authenticatorAttachment: PasskeyAttachment | null;
 }
 
 interface PrfExtensionResults {
@@ -35,6 +35,15 @@ function credentialId(credential: PublicKeyCredential): string {
   const rawId = new Uint8Array(credential.rawId);
   if (rawId.length === 0) throw invalidInput("credential ID must not be empty");
   return bytesToBase64Url(rawId);
+}
+
+function authenticatorAttachment(
+  credential: PublicKeyCredential,
+): PasskeyAttachment | null {
+  const attachment = credential.authenticatorAttachment;
+  return attachment === "platform" || attachment === "cross-platform"
+    ? attachment
+    : null;
 }
 
 function resultFromCredential(credential: PublicKeyCredential): InternalPrfResult {
@@ -73,7 +82,7 @@ function resultFromCredential(credential: PublicKeyCredential): InternalPrfResul
   return {
     credentialId: credentialId(credential),
     prfOutput,
-    isPlatformAuthenticator: credential.authenticatorAttachment === "platform",
+    authenticatorAttachment: authenticatorAttachment(credential),
   };
 }
 
