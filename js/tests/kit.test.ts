@@ -413,6 +413,19 @@ describe("capability", () => {
     );
   });
 
+  it("lets any-attachment enrollment proceed without a platform authenticator", async () => {
+    installCredentials({ create: vi.fn(), get: vi.fn() });
+    vi.stubGlobal("PublicKeyCredential", {
+      isUserVerifyingPlatformAuthenticatorAvailable: vi.fn(async () => false),
+      getClientCapabilities: vi.fn(async () => ({ "extension:prf": true })),
+    });
+    await expect(
+      createManager({ enrollmentAttachment: "any" }).capability({
+        operation: "enroll",
+      }),
+    ).resolves.toBe("supported");
+  });
+
   it("returns unknown when PRF capability cannot be determined", async () => {
     installCredentials({ create: vi.fn(), get: vi.fn() });
     vi.stubGlobal("PublicKeyCredential", {
@@ -440,6 +453,64 @@ describe("capability", () => {
     await expect(
       createManager().capability({ operation: "enroll" }),
     ).resolves.toBe("unknown");
+  });
+});
+
+describe("enrollment attachment", () => {
+  it("requests a platform authenticator unless enrollment allows any", async () => {
+    const attachments: Array<AuthenticatorAttachment | undefined> = [];
+    installCredentials({
+      create: vi.fn(async (options: CredentialCreationOptions) => {
+        attachments.push(
+          options.publicKey?.authenticatorSelection?.authenticatorAttachment,
+        );
+        return credential({ prf: new Uint8Array(32) });
+      }),
+    } as Partial<CredentialsContainer>);
+    await createManager().createAndWrapKey({ user, key: new Uint8Array(32) });
+    await createManager({ enrollmentAttachment: "any" }).createAndWrapKey({
+      user,
+      key: new Uint8Array(32),
+    });
+    expect(attachments).toEqual(["platform", undefined]);
+  });
+
+  it("keeps the local credential when a roaming authenticator enrolls", async () => {
+    const storage = createMemoryPasskeyKeyStorage();
+    installCredentials({
+      create: vi
+        .fn()
+        .mockResolvedValueOnce(
+          credential({
+            rawId: new Uint8Array([1]),
+            prf: new Uint8Array(32).fill(5),
+            attachment: "platform",
+          }),
+        )
+        .mockResolvedValueOnce(
+          credential({
+            rawId: new Uint8Array([2]),
+            prf: new Uint8Array(32).fill(6),
+            attachment: "cross-platform",
+          }),
+        ),
+    });
+    const manager = createManager({ storage, enrollmentAttachment: "any" });
+    const local = await manager.createAndWrapKey({ user, key: new Uint8Array(32) });
+    const roaming = await manager.createAndWrapKey({
+      user,
+      key: new Uint8Array(32),
+    });
+    expect(storage.loadLocalCredentialId()).toBe(local.credentialId);
+    expect(storage.loadCachedPRFResult()?.credentialId).toBe(
+      roaming.credentialId,
+    );
+  });
+
+  it("rejects an unknown enrollment attachment", () => {
+    expect(() =>
+      createManager({ enrollmentAttachment: "cross-platform" as never }),
+    ).toThrowError(expect.objectContaining({ category: "invalid_input" }));
   });
 });
 
