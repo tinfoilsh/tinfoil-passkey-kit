@@ -127,6 +127,10 @@ export function createPasskeyKeyManager(
     );
   }
   const timeoutMs = config.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const enrollmentAttachment = config.enrollmentAttachment ?? "platform";
+  if (enrollmentAttachment !== "platform" && enrollmentAttachment !== "any") {
+    throw invalidInput("enrollmentAttachment must be platform or any");
+  }
   let activeCeremony: ActiveCeremony | null = null;
 
   async function runCeremony(
@@ -322,7 +326,12 @@ export function createPasskeyKeyManager(
     const key = input.key.slice();
     const user = copyUser(input.user);
     const result = await runCeremony("createAndWrapKey", input.signal, (signal) =>
-      createPrfCredential(context(profile, relyingPartyName, timeoutMs), user, signal),
+      createPrfCredential(
+        context(profile, relyingPartyName, timeoutMs),
+        user,
+        signal,
+        enrollmentAttachment,
+      ),
     );
     recordSuccessfulCredential(result);
     const wrappedKey = await wrapKeyWithPRFResult(
@@ -404,7 +413,7 @@ export function createPasskeyKeyManager(
       ) {
         throw invalidInput("operation must be enroll or recover", "capability");
       }
-      return detectCapability(input.operation);
+      return detectCapability(input.operation, enrollmentAttachment);
     },
 
     createAndWrapKey,

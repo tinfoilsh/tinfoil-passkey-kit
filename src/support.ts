@@ -1,4 +1,4 @@
-import type { PasskeyCapability } from "./types.js";
+import type { EnrollmentAttachment, PasskeyCapability } from "./types.js";
 
 function hasWebAuthn(operation: "enroll" | "recover"): boolean {
   return (
@@ -28,9 +28,10 @@ async function prfCapability(): Promise<PasskeyCapability> {
 
 export async function capability(
   operation: "enroll" | "recover",
+  enrollmentAttachment: EnrollmentAttachment,
 ): Promise<PasskeyCapability> {
   if (!hasWebAuthn(operation)) return "unsupported";
-  if (operation === "recover") return prfCapability();
+  if (operation === "recover" || enrollmentAttachment === "any") return prfCapability();
   if (
     typeof PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable !== "function"
   ) {

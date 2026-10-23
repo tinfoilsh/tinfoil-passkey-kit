@@ -22,6 +22,7 @@ export interface PasskeyUser {
 
 export type PasskeyCapability = "supported" | "unsupported" | "unknown";
 export type PasskeyInteraction = "interactive" | "immediatelyAvailable";
+export type EnrollmentAttachment = "platform" | "any";
 
 export interface CreateAndWrapKeyInput {
   user: PasskeyUser;
@@ -82,6 +83,7 @@ export interface PasskeyKeyManagerConfig {
   relyingPartyName: string;
   timeoutMs?: number;
   storage?: PasskeyKeyStorage;
+  enrollmentAttachment?: EnrollmentAttachment;
 }
 
 export interface PasskeyKeyManager {

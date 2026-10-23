@@ -44,7 +44,7 @@ interface WrappedKeyRecord {
 ## Manager
 
 A manager is bound to exactly one profile: `createPasskeyKeyManager({ profile,
-relyingPartyName, storage?, timeoutMs? })` in JavaScript and
+relyingPartyName, storage?, timeoutMs?, enrollmentAttachment? })` in JavaScript and
 `PasskeyKeyManager(profile:relyingPartyName:storage:presentationAnchorProvider:timeout:)`
 in Swift. No operation accepts a per-call profile. The relying-party name is
 presentation configuration, not profile identity; AuthenticationServices does
@@ -93,8 +93,9 @@ It is advisory, not proof that an authenticator will return PRF output.
 `supported` permits an attempt, `unsupported` means the platform definitively
 rejects the operation, and `unknown` means it cannot tell without a ceremony,
 so callers should attempt and handle the result. `enroll` requires a
-PRF-capable platform authenticator; `recover` does not require platform
-attachment. See the [support matrix](support-matrix.md) for platform behavior.
+PRF-capable platform authenticator unless the JavaScript manager sets
+`enrollmentAttachment: "any"`, which also allows security keys and hybrid
+devices; `recover` does not require platform attachment. See the [support matrix](support-matrix.md) for platform behavior.
 
 ## Errors and lifecycle
 
