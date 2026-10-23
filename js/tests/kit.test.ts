@@ -84,7 +84,11 @@ describe("contract flows", () => {
     const recovered = await manager.recoverKey({
       wrappedKeys: [created.wrappedKey],
     });
-    expect(recovered).toEqual({ credentialId: created.credentialId, key });
+    expect(recovered).toEqual({
+      credentialId: created.credentialId,
+      key,
+      authenticatorAttachment: "cross-platform",
+    });
   });
 
   it("uses profile RP fields and snapshots profile and user bytes", async () => {
@@ -501,10 +505,26 @@ describe("enrollment attachment", () => {
       user,
       key: new Uint8Array(32),
     });
+    expect(local.authenticatorAttachment).toBe("platform");
+    expect(roaming.authenticatorAttachment).toBe("cross-platform");
     expect(storage.loadLocalCredentialId()).toBe(local.credentialId);
     expect(storage.loadCachedPRFResult()?.credentialId).toBe(
       roaming.credentialId,
     );
+  });
+
+  it("reports an unreported attachment as null without claiming the credential", async () => {
+    const storage = createMemoryPasskeyKeyStorage();
+    const unreported = credential({ prf: new Uint8Array(32).fill(7) });
+    Object.defineProperty(unreported, "authenticatorAttachment", { value: null });
+    installCredentials({ create: vi.fn(async () => unreported) });
+    const created = await createManager({
+      storage,
+      enrollmentAttachment: "any",
+    }).createAndWrapKey({ user, key: new Uint8Array(32) });
+    expect(created.authenticatorAttachment).toBeNull();
+    expect(storage.loadCachedPRFResult()?.credentialId).toBe(created.credentialId);
+    expect(storage.loadLocalCredentialId()).toBeNull();
   });
 
   it("rejects an unknown enrollment attachment", () => {
@@ -527,6 +547,7 @@ describe("credential evaluation", () => {
     expect(uncached).toEqual({
       credentialId: "AQ",
       prfResult: { output: new Uint8Array(32).map((_, index) => index) },
+      authenticatorAttachment: "platform",
     });
     expect(localStorage.length).toBe(0);
 

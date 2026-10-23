@@ -202,7 +202,7 @@ export function createPasskeyKeyManager(
     } catch {
       // Storage is best-effort and cannot invalidate a successful ceremony.
     }
-    if (result.isPlatformAuthenticator) {
+    if (result.authenticatorAttachment === "platform") {
       try {
         config.storage?.saveLocalCredentialId(result.credentialId);
       } catch {
@@ -342,7 +342,11 @@ export function createPasskeyKeyManager(
       },
       "createAndWrapKey",
     );
-    return { credentialId: result.credentialId, wrappedKey };
+    return {
+      credentialId: result.credentialId,
+      wrappedKey,
+      authenticatorAttachment: result.authenticatorAttachment,
+    };
   }
 
   function prepareRecovery(input: RecoverKeyInput) {
@@ -401,6 +405,7 @@ export function createPasskeyKeyManager(
     return {
       credentialId: result.credentialId,
       prfResult: { output: result.prfOutput.slice() },
+      authenticatorAttachment: result.authenticatorAttachment,
     };
   }
 
@@ -451,6 +456,7 @@ export function createPasskeyKeyManager(
           { wrappedKey: wrapped, prfResult: result.prfResult },
           "recoverKey",
         ),
+        authenticatorAttachment: result.authenticatorAttachment,
       };
     },
 
@@ -472,6 +478,7 @@ export function createPasskeyKeyManager(
             },
             "recoverKeyFromCache",
           ),
+          authenticatorAttachment: null,
         };
       } catch {
         return null;

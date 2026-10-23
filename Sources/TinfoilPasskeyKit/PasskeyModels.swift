@@ -101,23 +101,40 @@ public struct PasskeyUser: Codable, Equatable, Sendable {
     }
 }
 
+public enum PasskeyAttachment: Equatable, Sendable {
+    case platform
+    case crossPlatform
+}
+
 public struct CreatedWrappedKey: Equatable, Sendable {
     public let credentialId: String
     public let wrappedKey: WrappedKey
+    public let authenticatorAttachment: PasskeyAttachment?
 
-    public init(credentialId: String, wrappedKey: WrappedKey) {
+    public init(
+        credentialId: String,
+        wrappedKey: WrappedKey,
+        authenticatorAttachment: PasskeyAttachment? = nil
+    ) {
         self.credentialId = credentialId
         self.wrappedKey = wrappedKey
+        self.authenticatorAttachment = authenticatorAttachment
     }
 }
 
 public struct RecoveredKey: Equatable, Sendable {
     public let credentialId: String
     public let key: Data
+    public let authenticatorAttachment: PasskeyAttachment?
 
-    public init(credentialId: String, key: Data) {
+    public init(
+        credentialId: String,
+        key: Data,
+        authenticatorAttachment: PasskeyAttachment? = nil
+    ) {
         self.credentialId = credentialId
         self.key = key
+        self.authenticatorAttachment = authenticatorAttachment
     }
 }
 
@@ -137,10 +154,16 @@ public struct PRFResult: Equatable, Sendable {
 public struct EvaluatedCredential: Equatable, Sendable {
     public let credentialId: String
     public let prfResult: PRFResult
+    public let authenticatorAttachment: PasskeyAttachment?
 
-    public init(credentialId: String, prfResult: PRFResult) {
+    public init(
+        credentialId: String,
+        prfResult: PRFResult,
+        authenticatorAttachment: PasskeyAttachment? = nil
+    ) {
         self.credentialId = credentialId
         self.prfResult = prfResult
+        self.authenticatorAttachment = authenticatorAttachment
     }
 }
 

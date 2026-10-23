@@ -70,11 +70,12 @@ describe("WebAuthn PRF output", () => {
     await expect(manager.recoverKey({ wrappedKeys: [wrappedKey] })).resolves.toEqual({
       credentialId: CREDENTIAL_ID,
       key,
+      authenticatorAttachment: "platform",
     });
     expect(storage.loadCachedPRFResult()?.prfOutput).toEqual(prf);
     await expect(
       manager.recoverKeyFromCache({ wrappedKeys: [wrappedKey] }),
-    ).resolves.toEqual({ credentialId: CREDENTIAL_ID, key });
+    ).resolves.toEqual({ credentialId: CREDENTIAL_ID, key, authenticatorAttachment: null });
   });
 
   it.each([
@@ -92,6 +93,7 @@ describe("WebAuthn PRF output", () => {
     await expect(manager.recoverKey({ wrappedKeys: [wrappedKey] })).resolves.toEqual({
       credentialId: CREDENTIAL_ID,
       key,
+      authenticatorAttachment: "platform",
     });
   });
 

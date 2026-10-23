@@ -17,6 +17,7 @@ export type {
   EvaluatedCredential,
   EvaluateCredentialInput,
   EnrollmentAttachment,
+  PasskeyAttachment,
   PasskeyCapability,
   PasskeyInteraction,
   PasskeyKeyManager,
